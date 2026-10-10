@@ -14,7 +14,10 @@ class MainActivity : Activity() {
 
     private val db by lazy { FirebaseFirestore.getInstance() }
     private val auth by lazy { FirebaseAuth.getInstance() }
+
     private lateinit var content: LinearLayout
+    private lateinit var merchantList: LinearLayout
+    private lateinit var productList: LinearLayout
     private lateinit var customerName: EditText
     private lateinit var customerPhone: EditText
     private lateinit var deliveryAddress: EditText
@@ -23,6 +26,9 @@ class MainActivity : Activity() {
     private var merchantId = ""
     private var merchantName = ""
     private var deliveryFee = 40.0
+    private var loadingMerchants = false
+    private var loadingProducts = false
+    private var placingOrder = false
 
     private data class CartLine(
         val id: String,
@@ -37,26 +43,43 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
 
         val scroll = ScrollView(this)
+
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setPadding(24, 24, 24, 32)
         }
+
         scroll.addView(content)
         setContentView(scroll)
 
         title("Delivery Marketplace")
+        heading("Customer details", 22f)
 
         customerName = edit("Your full name")
         customerPhone = edit("Mobile number")
         deliveryAddress = edit("Complete delivery address")
 
+        button("Load merchants") {
+            loadMerchants()
+        }
+
+        heading("Available merchants")
+        merchantList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        content.addView(merchantList)
+
+        heading("Menu")
+        productList = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+        }
+        content.addView(productList)
+
+        heading("Your cart")
         cartLabel = TextView(this).apply {
             textSize = 16f
             setTextColor(Color.DKGRAY)
         }
-
-        button("Load merchants") { loadMerchants() }
-        heading("Your cart")
         content.addView(cartLabel)
         updateCart()
 
@@ -65,14 +88,12 @@ class MainActivity : Activity() {
         }
 
         auth.signInAnonymously()
-            .addOnSuccessListener { loadMerchants() }
+            .addOnSuccessListener {
+                loadMerchants()
+            }
             .addOnFailureListener {
                 message("Login failed: ${it.message}")
             }
-    }
-
-    private fun title(text: String) {
-        heading(text, 26f)
     }
 
     private fun heading(text: String, size: Float = 20f) {
@@ -84,43 +105,82 @@ class MainActivity : Activity() {
         })
     }
 
-    
-private fun edit(hintText: String): EditText {
-    val field = EditText(this)
-    field.hint = hintText
-    field.textSize = 16f
-    field.setSingleLine(
-        hintText != "Complete delivery address"
-    )
-    content.addView(field)
-    return field
-}
+    private fun edit(hintText: String): EditText {
+        val field = EditText(this)
+        field.hint = hintText
+        field.textSize = 16f
+        field.setSingleLine(
+            hintText != "Complete delivery address"
+        )
+        content.addView(field)
+        return field
+    }
 
-
-    private fun button(text: String, action: () -> Unit) {
+    private fun button(
+        text: String,
+        action: () -> Unit
+    ) {
         content.addView(Button(this).apply {
             this.text = text
             setOnClickListener { action() }
         })
     }
 
+    private fun listButton(
+        parent: LinearLayout,
+        text: String,
+        action: () -> Unit
+    ) {
+        parent.addView(Button(this).apply {
+            this.text = text
+            setOnClickListener { action() }
+        })
+    }
+
     private fun message(text: String) {
-        Toast.makeText(this, text, Toast.LENGTH_LONG).show()
+        Toast.makeText(
+            this,
+            text,
+            Toast.LENGTH_LONG
+        ).show()
     }
 
     private fun loadMerchants() {
+        if (loadingMerchants) return
+
+        loadingMerchants = true
+        merchantList.removeAllViews()
+        merchantList.addView(TextView(this).apply {
+            text = "Loading merchants..."
+        })
+
         db.collection("merchants")
             .whereEqualTo("active", true)
             .get()
             .addOnSuccessListener { results ->
-                heading("Available merchants")
+                loadingMerchants = false
+                merchantList.removeAllViews()
+
+                if (results.isEmpty) {
+                    merchantList.addView(TextView(this).apply {
+                        text = "No active merchants found."
+                    })
+                    return@addOnSuccessListener
+                }
 
                 for (doc in results.documents) {
                     val id = doc.id
                     val name = doc.getString("name") ?: "Merchant"
-                    val fee = doc.getDouble("deliveryFee") ?: 40.0
+                    val fee = (
+                        doc.getDouble("deliveryFee")
+                            ?: doc.getLong("deliveryFee")?.toDouble()
+                            ?: 40.0
+                        )
 
-                    button("$name • Delivery ₱${fee.toInt()}") {
+                    listButton(
+                        merchantList,
+                        "$name • Delivery ₱${fee.toInt()}"
+                    ) {
                         merchantId = id
                         merchantName = name
                         deliveryFee = fee
@@ -129,48 +189,72 @@ private fun edit(hintText: String): EditText {
                         loadProducts(id, name)
                     }
                 }
-
-                if (results.isEmpty) {
-                    message("No active merchants found.")
-                }
             }
             .addOnFailureListener {
+                loadingMerchants = false
+                merchantList.removeAllViews()
                 message("Could not load merchants: ${it.message}")
             }
     }
 
     private fun loadProducts(id: String, name: String) {
+        if (loadingProducts) return
+
+        loadingProducts = true
+        productList.removeAllViews()
+        productList.addView(TextView(this).apply {
+            text = "Loading menu for $name..."
+        })
+
         db.collection("merchants")
             .document(id)
             .collection("products")
             .whereEqualTo("available", true)
             .get()
             .addOnSuccessListener { results ->
-                heading("Menu: $name")
+                loadingProducts = false
+                productList.removeAllViews()
+
+                if (results.isEmpty) {
+                    productList.addView(TextView(this).apply {
+                        text = "This merchant has no available products."
+                    })
+                    return@addOnSuccessListener
+                }
 
                 for (doc in results.documents) {
+                    val productId = doc.id
                     val productName =
                         doc.getString("name") ?: "Product"
-                    val price = doc.getDouble("price") ?: 0.0
+                    val price = (
+                        doc.getDouble("price")
+                            ?: doc.getLong("price")?.toDouble()
+                            ?: 0.0
+                        )
 
-                    button("$productName — ₱${price.toInt()}  + Add") {
-                        val line = cart[doc.id]
+                    listButton(
+                        productList,
+                        "$productName — ₱${price.toInt()}  + Add"
+                    ) {
+                        val line = cart[productId]
+
                         if (line == null) {
-                            cart[doc.id] = CartLine(
-                                doc.id, productName, price
+                            cart[productId] = CartLine(
+                                productId,
+                                productName,
+                                price
                             )
                         } else {
                             line.quantity++
                         }
+
                         updateCart()
                     }
                 }
-
-                if (results.isEmpty) {
-                    message("This merchant has no available products.")
-                }
             }
             .addOnFailureListener {
+                loadingProducts = false
+                productList.removeAllViews()
                 message("Could not load menu: ${it.message}")
             }
     }
@@ -195,6 +279,8 @@ private fun edit(hintText: String): EditText {
     }
 
     private fun placeOrder() {
+        if (placingOrder) return
+
         val user = auth.currentUser
         if (user == null) {
             message("Please wait for customer sign-in.")
@@ -247,14 +333,18 @@ private fun edit(hintText: String): EditText {
             "createdAt" to FieldValue.serverTimestamp()
         )
 
+        placingOrder = true
+
         db.collection("orders")
             .add(order)
             .addOnSuccessListener { ref ->
+                placingOrder = false
                 cart.clear()
                 updateCart()
                 message("Order placed! Order ID: ${ref.id}")
             }
             .addOnFailureListener {
+                placingOrder = false
                 message("Order failed: ${it.message}")
             }
     }
