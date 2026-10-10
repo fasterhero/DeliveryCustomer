@@ -84,15 +84,18 @@ class MainActivity : Activity() {
         })
     }
 
-    private fun edit(hintText: String): EditText {
-        val field = EditText(this).apply {
-            hint = hintText
-            textSize = 16f
-            singleLine = hintText != "Complete delivery address"
-        }
-        content.addView(field)
-        return field
-    }
+    
+private fun edit(hintText: String): EditText {
+    val field = EditText(this)
+    field.hint = hintText
+    field.textSize = 16f
+    field.setSingleLine(
+        hintText != "Complete delivery address"
+    )
+    content.addView(field)
+    return field
+}
+
 
     private fun button(text: String, action: () -> Unit) {
         content.addView(Button(this).apply {
