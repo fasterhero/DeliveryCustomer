@@ -52,8 +52,8 @@ class MainActivity : Activity() {
         scroll.addView(content)
         setContentView(scroll)
 
-        title("Delivery Marketplace")
-        heading("Customer details", 22f)
+        this.title = "Delivery Marketplace"
+heading("Delivery Marketplace", 26f)
 
         customerName = edit("Your full name")
         customerPhone = edit("Mobile number")
