@@ -291,8 +291,7 @@ private fun buildHomeHeader() {
     // Keep the rest of your existing showMarketplace() code here,
     // starting with your current heading("Delivery Marketplace")
 
-        loadingMerchants = false
-        loadingProducts = false
+        
 
         heading("Delivery Marketplace", 26f)
 
