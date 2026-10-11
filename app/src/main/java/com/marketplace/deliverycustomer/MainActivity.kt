@@ -152,7 +152,7 @@ searchInput.textSize = 14f
     profileButton.contentDescription = "Open profile"
     profileButton.background = null
     profileButton.setOnClickListener {
-        message("Profile page will be added in the next steps.")
+    showProfileScreen()
     }
 
     header.addView(
@@ -288,6 +288,115 @@ private fun showSearchScreen() {
     updateResults(searchQuery)
 }
 
+
+private fun showProfileScreen() {
+    val user = auth.currentUser
+
+    if (user == null || user.isAnonymous) {
+        showAuthScreen()
+        return
+    }
+
+    content.removeAllViews()
+
+    heading("My Profile", 24f)
+
+    val avatar = TextView(this).apply {
+        text = "👤"
+        textSize = 48f
+        gravity = Gravity.CENTER
+        setPadding(0, dp(12), 0, dp(12))
+    }
+    content.addView(avatar)
+
+    heading("Personal information", 18f)
+
+    val nameField = makeField("Full name").apply {
+        setText(user.displayName ?: "")
+    }
+
+    val phoneField = makeField("Mobile number").apply {
+        setText(pendingPhone)
+        inputType = InputType.TYPE_CLASS_PHONE
+    }
+
+    val emailField = makeField("Email address").apply {
+        setText(user.email ?: "")
+        isEnabled = false
+        alpha = 0.7f
+    }
+
+    button("Save profile") {
+        val name = nameField.text.toString().trim()
+        val phone = phoneField.text.toString().trim()
+
+        if (name.isBlank() || phone.isBlank()) {
+            message("Enter your name and mobile number.")
+            return@button
+        }
+
+        val profile = UserProfileChangeRequest.Builder()
+            .setDisplayName(name)
+            .build()
+
+        user.updateProfile(profile)
+            .addOnSuccessListener {
+                pendingPhone = phone
+
+                db.collection("customers")
+                    .document(user.uid)
+                    .set(
+                        mapOf(
+                            "name" to name,
+                            "phone" to phone,
+                            "email" to (user.email ?: "")
+                        )
+                    )
+                    .addOnSuccessListener {
+                        message("Profile saved successfully.")
+                    }
+                    .addOnFailureListener {
+                        message(
+                            "Name updated, but phone could not be saved: " +
+                                "${it.message}"
+                        )
+                    }
+            }
+            .addOnFailureListener {
+                message("Could not update profile: ${it.message}")
+            }
+    }
+
+    heading("Security", 18f)
+
+    button("Change password") {
+        val email = user.email
+
+        if (email.isNullOrBlank()) {
+            message("Your account has no email address.")
+            return@button
+        }
+
+        auth.sendPasswordResetEmail(email)
+            .addOnSuccessListener {
+                message("Password reset instructions sent to $email")
+            }
+            .addOnFailureListener {
+                message("Could not send reset email: ${it.message}")
+            }
+    }
+
+    heading("My merchant reviews", 18f)
+
+    text(
+        "Your merchant reviews will appear here when the review feature " +
+            "is connected."
+    )
+
+    button("Back to home") {
+        showMarketplace(user)
+    }
+}
 
 
 private fun buildCategoryShortcuts() {
