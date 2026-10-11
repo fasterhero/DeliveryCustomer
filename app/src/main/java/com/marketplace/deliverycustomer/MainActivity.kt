@@ -123,6 +123,11 @@ private fun buildHomeHeader() {
     searchInput = EditText(this)
     searchInput.hint = "Search food, merchants, places"
 searchInput.setSingleLine(true)
+searchInput.isFocusable = false
+searchInput.isClickable = true
+searchInput.setOnClickListener {
+    showSearchScreen()
+}
 searchInput.textSize = 14f
     searchInput.setCompoundDrawablesWithIntrinsicBounds(
         android.R.drawable.ic_menu_search,
@@ -163,6 +168,126 @@ searchInput.textSize = 14f
         )
     )
 }
+
+
+private fun showSearchScreen() {
+    content.removeAllViews()
+
+    heading("Search", 24f)
+
+    val searchField = EditText(this).apply {
+        hint = "Search food, merchants, places"
+        setSingleLine(true)
+        textSize = 16f
+        setText(searchQuery)
+    }
+
+    content.addView(
+        searchField,
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            dp(52)
+        )
+    )
+
+    button("Back to home") {
+        val user = auth.currentUser
+        if (user != null && !user.isAnonymous) {
+            showMarketplace(user)
+        } else {
+            showAuthScreen()
+        }
+    }
+
+    val results = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+    }
+    content.addView(results)
+
+    fun updateResults(query: String) {
+        searchQuery = query
+        results.removeAllViews()
+
+        if (query.isBlank()) {
+            results.addView(TextView(this).apply {
+                text = "Search for food, merchants, or places."
+                textSize = 14f
+                setPadding(0, dp(12), 0, dp(12))
+            })
+            return
+        }
+
+        db.collection("merchants")
+            .whereEqualTo("active", true)
+            .get()
+            .addOnSuccessListener { merchants ->
+                results.removeAllViews()
+
+                var matches = 0
+
+                for (doc in merchants.documents) {
+                    val name = doc.getString("name") ?: "Merchant"
+
+                    if (name.contains(query, ignoreCase = true)) {
+                        matches++
+
+                        listButton(results, name) {
+                            merchantId = doc.id
+                            merchantName = name
+                            deliveryFee = (
+                                doc.getDouble("deliveryFee")
+                                    ?: doc.getLong("deliveryFee")?.toDouble()
+                                    ?: 40.0
+                            )
+
+                            cart.clear()
+                            updateCart()
+                            loadProducts(doc.id, name)
+
+                            val user = auth.currentUser
+                            if (user != null && !user.isAnonymous) {
+                                showMarketplace(user)
+                                message("Selected $name. Choose a product below.")
+                            }
+                        }
+                    }
+                }
+
+                if (matches == 0) {
+                    results.addView(TextView(this).apply {
+                        text = "No matching merchants found."
+                        textSize = 14f
+                    })
+                }
+            }
+            .addOnFailureListener {
+                message("Search failed: ${it.message}")
+            }
+    }
+
+    searchField.addTextChangedListener(object : TextWatcher {
+        override fun beforeTextChanged(
+            s: CharSequence?,
+            start: Int,
+            count: Int,
+            after: Int
+        ) {}
+
+        override fun onTextChanged(
+            s: CharSequence?,
+            start: Int,
+            before: Int,
+            count: Int
+        ) {
+            updateResults(s?.toString().orEmpty())
+        }
+
+        override fun afterTextChanged(s: Editable?) {}
+    })
+
+    updateResults(searchQuery)
+}
+
 
 
 private fun buildCategoryShortcuts() {
