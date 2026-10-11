@@ -37,4 +37,7 @@ dependencies {
     )
     implementation("com.google.firebase:firebase-auth")
     implementation("com.google.firebase:firebase-firestore")
+
+    // OpenStreetMap map
+    implementation("org.osmdroid:osmdroid-android:6.1.20")
 }
