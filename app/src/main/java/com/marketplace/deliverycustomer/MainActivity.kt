@@ -20,6 +20,11 @@ import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.MapEventsOverlay
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.events.MapEventsReceiver
+import android.view.Gravity
+import android.view.View
+import android.graphics.drawable.GradientDrawable
+import android.text.Editable
+import android.text.TextWatcher
 
 class MainActivity : Activity() {
 
@@ -34,6 +39,15 @@ class MainActivity : Activity() {
     private lateinit var deliveryAddress: EditText
     private lateinit var cartLabel: TextView
     private lateinit var locationLabel: TextView
+    private lateinit var homeHeader: LinearLayout
+private lateinit var homeScroll: ScrollView
+private lateinit var homeFooter: TextView
+private lateinit var searchPreview: TextView
+
+private var selectedCategory = "explore"
+private var searchQuery = ""
+    private lateinit var rootLayout: LinearLayout
+private lateinit var bodyScroll: ScrollView
 
     private var mapView: MapView? = null
     private var deliveryMarker: Marker? = null
@@ -62,15 +76,26 @@ class MainActivity : Activity() {
 
         Configuration.getInstance().userAgentValue = packageName
 
-        val scroll = ScrollView(this)
+        rootLayout = LinearLayout(this)
+rootLayout.orientation = LinearLayout.VERTICAL
 
-        content = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setPadding(dp(18), dp(12), dp(18), dp(28))
-        }
+bodyScroll = ScrollView(this)
 
-        scroll.addView(content)
-        setContentView(scroll)
+content = LinearLayout(this)
+content.orientation = LinearLayout.VERTICAL
+content.setPadding(dp(16), dp(16), dp(16), dp(16))
+
+bodyScroll.addView(content)
+
+rootLayout.addView(
+    bodyScroll,
+    LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.MATCH_PARENT
+    )
+)
+
+setContentView(rootLayout)
 
         title = "Delivery Marketplace"
 
