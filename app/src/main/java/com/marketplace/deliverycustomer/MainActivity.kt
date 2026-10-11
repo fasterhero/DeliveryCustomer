@@ -45,6 +45,7 @@ private lateinit var homeFooter: TextView
 private lateinit var searchPreview: TextView
     private lateinit var searchInput: EditText
     private lateinit var merchantGrid: GridLayout
+    private lateinit var cartItemsContainer: LinearLayout
 
 private var selectedCategory = "explore"
 private var searchQuery = ""
@@ -747,6 +748,17 @@ content.addView(merchantList)
             textSize = 16f
             setTextColor(Color.DKGRAY)
         }
+        cartItemsContainer = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+}
+
+content.addView(
+    cartItemsContainer,
+    LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    )
+)
         content.addView(cartLabel)
         updateCart()
 
@@ -1047,24 +1059,114 @@ val isOpen = doc.getBoolean("isOpen")
             }
     }
 
-    private fun updateCart() {
-        if (!::cartLabel.isInitialized) return
+    
+private fun updateCart() {
+    if (!::cartLabel.isInitialized ||
+        !::cartItemsContainer.isInitialized
+    ) return
 
-        val subtotal = cart.values.sumOf {
-            it.price * it.quantity
+    cartItemsContainer.removeAllViews()
+
+    if (cart.isEmpty()) {
+        val emptyText = TextView(this).apply {
+            text = "Your cart is empty."
+            textSize = 15f
+            setPadding(0, 12, 0, 12)
         }
+        cartItemsContainer.addView(emptyText)
+    } else {
+        cart.values.toList().forEach { item ->
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(10, 12, 10, 12)
+                background = GradientDrawable().apply {
+                    setColor(Color.WHITE)
+                    setStroke(1, Color.LTGRAY)
+                    cornerRadius = 12f
+                }
+            }
 
-        cartLabel.text = if (cart.isEmpty()) {
-            "Your cart is empty."
-        } else {
-            cart.values.joinToString("\n") {
-                "${it.name} × ${it.quantity} — ₱" +
-                    "${(it.price * it.quantity).toInt()}"
-            } + "\n\nSubtotal: ₱${subtotal.toInt()}" +
-                "\nDelivery: ₱${deliveryFee.toInt()}" +
-                "\nTotal: ₱${(subtotal + deliveryFee).toInt()}"
+            val itemName = TextView(this).apply {
+                text = item.name
+                textSize = 16f
+                setTypeface(null, Typeface.BOLD)
+            }
+
+            val itemPrice = TextView(this).apply {
+                text = "₱${(item.price * item.quantity).toInt()}"
+                textSize = 14f
+            }
+
+            val controls = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+            }
+
+            val minusButton = Button(this).apply {
+                text = "−"
+                setOnClickListener {
+                    val current = cart[item.id] ?: return@setOnClickListener
+                    if (current.quantity > 1) {
+                        current.quantity--
+                    }
+                    updateCart()
+                }
+            }
+
+            val quantityText = TextView(this).apply {
+                text = "  ${item.quantity}  "
+                textSize = 16f
+                gravity = Gravity.CENTER
+            }
+
+            val plusButton = Button(this).apply {
+                text = "+"
+                setOnClickListener {
+                    val current = cart[item.id] ?: return@setOnClickListener
+                    current.quantity++
+                    updateCart()
+                }
+            }
+
+            val removeButton = Button(this).apply {
+                text = "Remove"
+                setTextColor(Color.RED)
+                setOnClickListener {
+                    cart.remove(item.id)
+                    updateCart()
+                }
+            }
+
+            controls.addView(minusButton)
+            controls.addView(quantityText)
+            controls.addView(plusButton)
+            controls.addView(removeButton)
+
+            row.addView(itemName)
+            row.addView(itemPrice)
+            row.addView(controls)
+
+            val rowParams = LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT
+            ).apply {
+                bottomMargin = 10
+            }
+
+            cartItemsContainer.addView(row, rowParams)
         }
     }
+
+    val subtotal = cart.values.sumOf {
+        it.price * it.quantity
+    }
+
+    cartLabel.text =
+        "Subtotal: ₱${subtotal.toInt()}\n" +
+        "Delivery: ₱${deliveryFee.toInt()}\n" +
+        "Total: ₱${(subtotal + deliveryFee).toInt()}"
+}
+
 
     private fun placeOrder() {
         if (placingOrder) return
