@@ -44,6 +44,7 @@ private lateinit var homeScroll: ScrollView
 private lateinit var homeFooter: TextView
 private lateinit var searchPreview: TextView
     private lateinit var searchInput: EditText
+    private lateinit var merchantGrid: GridLayout
 
 private var selectedCategory = "explore"
 private var searchQuery = ""
@@ -457,12 +458,28 @@ private fun buildCategoryShortcuts() {
             maxLines = 4
         }
 
-        heading("3. Choose a merchant", 20f)
+        heading("Available merchants", 20f)
 
-        merchantList = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-        }
-        content.addView(merchantList)
+merchantGrid = GridLayout(this).apply {
+    columnCount = 2
+    rowCount = GridLayout.UNDEFINED
+    useDefaultMargins = false
+}
+
+content.addView(
+    merchantGrid,
+    LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        LinearLayout.LayoutParams.WRAP_CONTENT
+    )
+)
+
+// Keep merchantList as a compatibility container for existing code.
+merchantList = LinearLayout(this).apply {
+    orientation = LinearLayout.VERTICAL
+    visibility = View.GONE
+}
+content.addView(merchantList)
 
         button("Refresh merchants") {
             loadMerchants()
@@ -591,57 +608,109 @@ private fun buildCategoryShortcuts() {
         return (value * resources.displayMetrics.density).toInt()
     }
 
-    private fun loadMerchants() {
-        if (loadingMerchants || !::merchantList.isInitialized) return
+    
+private fun loadMerchants() {
+    if (loadingMerchants || !::merchantList.isInitialized) return
 
-        loadingMerchants = true
-        merchantList.removeAllViews()
-        merchantList.addView(TextView(this).apply {
+    loadingMerchants = true
+    merchantGrid.removeAllViews()
+
+    merchantGrid.addView(
+        TextView(this).apply {
             text = "Loading merchants..."
-        })
+            textSize = 14f
+        },
+        GridLayout.LayoutParams().apply {
+            columnSpec = GridLayout.spec(0, 2)
+        }
+    )
 
-        db.collection("merchants")
-            .whereEqualTo("active", true)
-            .get()
-            .addOnSuccessListener { results ->
-                loadingMerchants = false
-                merchantList.removeAllViews()
+    db.collection("merchants")
+        .whereEqualTo("active", true)
+        .get()
+        .addOnSuccessListener { results ->
+            loadingMerchants = false
+            merchantGrid.removeAllViews()
 
-                if (results.isEmpty) {
-                    merchantList.addView(TextView(this).apply {
+            if (results.isEmpty) {
+                merchantGrid.addView(
+                    TextView(this).apply {
                         text = "No active merchants found."
-                    })
-                    return@addOnSuccessListener
-                }
-
-                for (doc in results.documents) {
-                    val id = doc.id
-                    val name = doc.getString("name") ?: "Merchant"
-                    val fee = (
-                        doc.getDouble("deliveryFee")
-                            ?: doc.getLong("deliveryFee")?.toDouble()
-                            ?: 40.0
-                    )
-
-                    listButton(
-                        merchantList,
-                        "$name • Delivery ₱${fee.toInt()}"
-                    ) {
-                        merchantId = id
-                        merchantName = name
-                        deliveryFee = fee
-                        cart.clear()
-                        updateCart()
-                        loadProducts(id, name)
+                        textSize = 14f
                     }
+                )
+                return@addOnSuccessListener
+            }
+
+            for (doc in results.documents) {
+                val id = doc.id
+                val name = doc.getString("name") ?: "Merchant"
+                val fee = (
+                    doc.getDouble("deliveryFee")
+                        ?: doc.getLong("deliveryFee")?.toDouble()
+                        ?: 40.0
+                )
+
+                val card = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    setPadding(dp(12), dp(12), dp(12), dp(12))
+                    background = GradientDrawable().apply {
+                        setColor(Color.WHITE)
+                        cornerRadius = dp(12).toFloat()
+                        setStroke(dp(1), Color.rgb(225, 230, 225))
+                    }
+                    isClickable = true
+                    isFocusable = true
                 }
+
+                card.addView(TextView(this).apply {
+                    text = "🍽️"
+                    textSize = 28f
+                })
+
+                card.addView(TextView(this).apply {
+                    text = name
+                    textSize = 15f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setTextColor(Color.rgb(35, 65, 55))
+                })
+
+                card.addView(TextView(this).apply {
+                    text = "Delivery ₱${fee.toInt()}"
+                    textSize = 12f
+                    setTextColor(Color.DKGRAY)
+                })
+
+                card.setOnClickListener {
+                    merchantId = id
+                    merchantName = name
+                    deliveryFee = fee
+                    cart.clear()
+                    updateCart()
+                    loadProducts(id, name)
+                    message("Selected $name. Choose a product below.")
+                }
+
+                val params = GridLayout.LayoutParams().apply {
+                    width = 0
+                    height = GridLayout.LayoutParams.WRAP_CONTENT
+                    columnSpec = GridLayout.spec(
+                        GridLayout.UNDEFINED,
+                        1f
+                    )
+                    setMargins(dp(4), dp(4), dp(4), dp(4))
+                }
+
+                merchantGrid.addView(card, params)
             }
-            .addOnFailureListener {
-                loadingMerchants = false
-                merchantList.removeAllViews()
-                message("Could not load merchants: ${it.message}")
-            }
-    }
+        }
+        .addOnFailureListener {
+            loadingMerchants = false
+            merchantGrid.removeAllViews()
+            message("Could not load merchants: ${it.message}")
+        }
+}
+
 
     private fun loadProducts(id: String, name: String) {
         if (loadingProducts) return
