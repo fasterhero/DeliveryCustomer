@@ -162,6 +162,82 @@ searchInput.textSize = 14f
         )
     )
 }
+
+
+private fun buildCategoryShortcuts() {
+    val categories = listOf(
+        "Explore" to "explore",
+        "Food" to "food",
+        "Convenience" to "convenience",
+        "Parcel" to "parcel",
+        "Pabili" to "pabili"
+    )
+
+    val categoryRow = LinearLayout(this).apply {
+        orientation = LinearLayout.HORIZONTAL
+        gravity = Gravity.CENTER
+    }
+
+    for ((label, category) in categories) {
+        val item = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            setPadding(dp(3), dp(8), dp(3), dp(8))
+        }
+
+        val circle = TextView(this).apply {
+            text = when (category) {
+                "explore" -> "⌂"
+                "food" -> "🍔"
+                "convenience" -> "🛍"
+                "parcel" -> "📦"
+                else -> "🛒"
+            }
+            textSize = 23f
+            gravity = Gravity.CENTER
+            setTextColor(Color.rgb(35, 90, 65))
+            background = GradientDrawable().apply {
+                shape = GradientDrawable.OVAL
+                setColor(Color.rgb(235, 246, 239))
+            }
+        }
+
+        item.addView(
+            circle,
+            LinearLayout.LayoutParams(dp(52), dp(52))
+        )
+
+        item.addView(TextView(this).apply {
+            text = label
+            textSize = 11f
+            gravity = Gravity.CENTER
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(5), 0, 0)
+        })
+
+        item.setOnClickListener {
+            selectedCategory = category
+
+            when (category) {
+                "parcel" -> message("Parcel delivery will be added next.")
+                "pabili" -> message("Pabili service will be added next.")
+                else -> {
+                    message("$label selected")
+                    loadMerchants()
+                }
+            }
+        }
+
+        categoryRow.addView(
+            item,
+            LinearLayout.LayoutParams(0, dp(88), 1f)
+        )
+    }
+
+    content.addView(categoryRow)
+}
+
+
     private fun showAuthScreen(register: Boolean = false) {
         content.removeAllViews()
         mapView = null
@@ -304,6 +380,8 @@ searchInput.textSize = 14f
             selectedLongitude = null
             showAuthScreen()
         }
+
+        buildCategoryShortcuts()
 
         heading("1. Choose your delivery location", 20f)
 
