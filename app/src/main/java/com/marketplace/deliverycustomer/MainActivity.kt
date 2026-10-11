@@ -382,6 +382,21 @@ private fun buildCategoryShortcuts() {
             showAuthScreen()
         }
 
+val adBanner = TextView(this).apply {
+    text = ""
+    visibility = View.GONE
+    gravity = Gravity.CENTER
+    setBackgroundColor(Color.rgb(245, 245, 245))
+}
+
+content.addView(
+    adBanner,
+    LinearLayout.LayoutParams(
+        LinearLayout.LayoutParams.MATCH_PARENT,
+        dp(120)
+    )
+)
+        
         buildCategoryShortcuts()
 
         heading("1. Choose your delivery location", 20f)
@@ -645,11 +660,15 @@ private fun loadMerchants() {
             for (doc in results.documents) {
                 val id = doc.id
                 val name = doc.getString("name") ?: "Merchant"
-                val fee = (
-                    doc.getDouble("deliveryFee")
-                        ?: doc.getLong("deliveryFee")?.toDouble()
-                        ?: 40.0
-                )
+val fee = (
+    doc.getDouble("deliveryFee")
+        ?: doc.getLong("deliveryFee")?.toDouble()
+        ?: 40.0
+)
+
+val isOpen = doc.getBoolean("isOpen")
+    ?: doc.getBoolean("open")
+    ?: true
 
                 val card = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
@@ -676,13 +695,32 @@ private fun loadMerchants() {
                 })
 
                 card.addView(TextView(this).apply {
+    text = if (isOpen) "OPEN NOW" else "CLOSED"
+    textSize = 11f
+    typeface = Typeface.DEFAULT_BOLD
+    setTextColor(
+        if (isOpen) {
+            Color.rgb(30, 130, 75)
+        } else {
+            Color.rgb(190, 55, 55)
+        }
+    )
+    setPadding(0, dp(6), 0, 0)
+})
+
+                card.addView(TextView(this).apply {
                     text = "Delivery ₱${fee.toInt()}"
                     textSize = 12f
                     setTextColor(Color.DKGRAY)
                 })
 
                 card.setOnClickListener {
-                    merchantId = id
+    if (!isOpen) {
+        message("$name is currently closed.")
+        return@setOnClickListener
+    }
+
+    merchantId = id
                     merchantName = name
                     deliveryFee = fee
                     cart.clear()
