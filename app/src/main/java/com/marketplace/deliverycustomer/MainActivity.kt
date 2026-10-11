@@ -288,13 +288,6 @@ private fun buildHomeHeader() {
         )
     )
 
-    // Keep the rest of your existing showMarketplace() code here,
-    // starting with your current heading("Delivery Marketplace")
-
-        
-
-        heading("Delivery Marketplace", 26f)
-
         val welcome = TextView(this).apply {
             text = "Signed in as ${user.email ?: "Customer"}"
             textSize = 14f
