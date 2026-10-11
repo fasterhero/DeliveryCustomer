@@ -121,8 +121,8 @@ private fun buildHomeHeader() {
 
     searchInput = EditText(this)
     searchInput.hint = "Search food, merchants, places"
-    searchInput.singleLine = true
-    searchInput.textSize = 14f
+searchInput.setSingleLine(true)
+searchInput.textSize = 14f
     searchInput.setCompoundDrawablesWithIntrinsicBounds(
         android.R.drawable.ic_menu_search,
         0,
