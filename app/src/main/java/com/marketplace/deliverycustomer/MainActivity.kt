@@ -2,13 +2,24 @@
 package com.marketplace.deliverycustomer
 
 import android.app.Activity
-import android.os.Bundle
 import android.graphics.Color
+import android.graphics.Typeface
+import android.os.Bundle
+import android.text.InputType
 import android.view.ViewGroup
 import android.widget.*
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.auth.FirebaseUser
+import com.google.firebase.auth.UserProfileChangeRequest
 import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
+import org.osmdroid.config.Configuration
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
+import org.osmdroid.util.GeoPoint
+import org.osmdroid.views.MapView
+import org.osmdroid.views.overlay.MapEventsOverlay
+import org.osmdroid.views.overlay.Marker
+import org.osmdroid.events.MapEventsReceiver
 
 class MainActivity : Activity() {
 
@@ -22,6 +33,12 @@ class MainActivity : Activity() {
     private lateinit var customerPhone: EditText
     private lateinit var deliveryAddress: EditText
     private lateinit var cartLabel: TextView
+    private lateinit var locationLabel: TextView
+
+    private var mapView: MapView? = null
+    private var deliveryMarker: Marker? = null
+    private var selectedLatitude: Double? = null
+    private var selectedLongitude: Double? = null
 
     private var merchantId = ""
     private var merchantName = ""
@@ -29,6 +46,7 @@ class MainActivity : Activity() {
     private var loadingMerchants = false
     private var loadingProducts = false
     private var placingOrder = false
+    private var pendingPhone = ""
 
     private data class CartLine(
         val id: String,
@@ -42,40 +60,259 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
+        Configuration.getInstance().userAgentValue = packageName
+
         val scroll = ScrollView(this)
 
         content = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(24, 24, 24, 32)
+            setPadding(dp(18), dp(12), dp(18), dp(28))
         }
 
         scroll.addView(content)
         setContentView(scroll)
 
-        this.title = "Delivery Marketplace"
-heading("Delivery Marketplace", 26f)
+        title = "Delivery Marketplace"
 
-        customerName = edit("Your full name")
-        customerPhone = edit("Mobile number")
-        deliveryAddress = edit("Complete delivery address")
+        val user = auth.currentUser
 
-        button("Load merchants") {
-            loadMerchants()
+        if (user != null && !user.isAnonymous) {
+            showMarketplace(user)
+        } else {
+            if (user?.isAnonymous == true) {
+                auth.signOut()
+            }
+            showAuthScreen()
+        }
+    }
+
+    private fun showAuthScreen(register: Boolean = false) {
+        content.removeAllViews()
+        mapView = null
+
+        heading("DELIVERY MARKETPLACE", 26f)
+        heading(
+            if (register) "Create your account" else "Welcome back",
+            21f
+        )
+
+        val nameField = makeField("Full name")
+        val phoneField = makeField("Mobile number")
+
+        if (!register) {
+            nameField.visibility = android.view.View.GONE
+            phoneField.visibility = android.view.View.GONE
         }
 
-        heading("Available merchants")
+        val emailField = makeField("Email address").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+        }
+
+        val passwordField = makeField("Password").apply {
+            inputType = InputType.TYPE_CLASS_TEXT or
+                InputType.TYPE_TEXT_VARIATION_PASSWORD
+        }
+
+        button("Log in") {
+            val email = emailField.text.toString().trim()
+            val password = passwordField.text.toString()
+
+            if (email.isBlank() || password.isBlank()) {
+                message("Enter your email and password.")
+                return@button
+            }
+
+            auth.signInWithEmailAndPassword(email, password)
+                .addOnSuccessListener { result ->
+                    val user = result.user
+
+                    if (user == null || user.isAnonymous) {
+                        auth.signOut()
+                        message("Please use a registered customer account.")
+                    } else {
+                        showMarketplace(user)
+                    }
+                }
+                .addOnFailureListener {
+                    message("Login failed: ${it.message}")
+                }
+        }
+
+        button("Create new account") {
+            val name = nameField.text.toString().trim()
+            val phone = phoneField.text.toString().trim()
+            val email = emailField.text.toString().trim()
+            val password = passwordField.text.toString()
+
+            if (name.isBlank() || phone.isBlank() ||
+                email.isBlank() || password.isBlank()
+            ) {
+                message("Enter your name, phone, email, and password.")
+                return@button
+            }
+
+            if (password.length < 6) {
+                message("Your password must be at least 6 characters.")
+                return@button
+            }
+
+            pendingPhone = phone
+
+            auth.createUserWithEmailAndPassword(email, password)
+                .addOnSuccessListener { result ->
+                    val user = result.user
+
+                    if (user == null) {
+                        message("Account created, but sign-in failed.")
+                        return@addOnSuccessListener
+                    }
+
+                    val profile = UserProfileChangeRequest.Builder()
+                        .setDisplayName(name)
+                        .build()
+
+                    user.updateProfile(profile)
+                        .addOnCompleteListener {
+                            showMarketplace(user)
+                        }
+                }
+                .addOnFailureListener {
+                    message("Registration failed: ${it.message}")
+                }
+        }
+
+        button(
+            if (register) "Back to login" else "Register a new account"
+        ) {
+            showAuthScreen(!register)
+        }
+
+        text(
+            "Your account lets your orders be associated with your " +
+                "registered customer ID."
+        )
+    }
+
+    private fun showMarketplace(user: FirebaseUser) {
+        content.removeAllViews()
+
+        loadingMerchants = false
+        loadingProducts = false
+
+        heading("Delivery Marketplace", 26f)
+
+        val welcome = TextView(this).apply {
+            text = "Signed in as ${user.email ?: "Customer"}"
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+        }
+        content.addView(welcome)
+
+        button("Log out") {
+            auth.signOut()
+            cart.clear()
+            merchantId = ""
+            merchantName = ""
+            selectedLatitude = null
+            selectedLongitude = null
+            showAuthScreen()
+        }
+
+        heading("1. Choose your delivery location", 20f)
+
+        text("Tap the map where you want your order delivered. " +
+            "You can zoom in and move the map.")
+
+        locationLabel = TextView(this).apply {
+            text = "No delivery point selected yet."
+            textSize = 14f
+            setTextColor(Color.rgb(35, 90, 65))
+            setPadding(0, dp(8), 0, dp(8))
+        }
+        content.addView(locationLabel)
+
+        val map = MapView(this)
+        mapView = map
+        map.setTileSource(TileSourceFactory.MAPNIK)
+        map.setMultiTouchControls(true)
+
+        val mapParams = LinearLayout.LayoutParams(
+            ViewGroup.LayoutParams.MATCH_PARENT,
+            dp(270)
+        )
+        content.addView(map, mapParams)
+
+        val startPoint = GeoPoint(9.7392, 118.7353)
+        map.controller.setZoom(13.0)
+        map.controller.setCenter(startPoint)
+
+        map.overlays.add(
+            MapEventsOverlay(
+                object : MapEventsReceiver {
+                    override fun singleTapConfirmedHelper(
+                        point: GeoPoint
+                    ): Boolean {
+                        selectDeliveryPoint(point)
+                        return true
+                    }
+
+                    override fun longPressHelper(
+                        point: GeoPoint
+                    ): Boolean {
+                        selectDeliveryPoint(point)
+                        return true
+                    }
+                }
+            )
+        )
+
+        text("Map data © OpenStreetMap contributors")
+
+        button("Use map center as delivery point") {
+            selectDeliveryPoint(
+                map.mapCenter as GeoPoint
+            )
+        }
+
+        heading("2. Delivery details", 20f)
+
+        customerName = makeField("Your full name").apply {
+            setText(user.displayName ?: "")
+        }
+
+        customerPhone = makeField("Mobile number").apply {
+            setText(pendingPhone)
+        }
+
+        deliveryAddress = makeField(
+            "Complete delivery address, house number, street, barangay"
+        ).apply {
+            setSingleLine(false)
+            minLines = 2
+            maxLines = 4
+        }
+
+        heading("3. Choose a merchant", 20f)
+
         merchantList = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
         content.addView(merchantList)
 
-        heading("Menu")
+        button("Refresh merchants") {
+            loadMerchants()
+        }
+
+        heading("4. Menu", 20f)
+
         productList = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
         }
         content.addView(productList)
 
-        heading("Your cart")
+        heading("5. Your cart", 20f)
+
         cartLabel = TextView(this).apply {
             textSize = 16f
             setTextColor(Color.DKGRAY)
@@ -87,66 +324,111 @@ heading("Delivery Marketplace", 26f)
             placeOrder()
         }
 
-        auth.signInAnonymously()
-            .addOnSuccessListener {
-                loadMerchants()
-            }
-            .addOnFailureListener {
-                message("Login failed: ${it.message}")
-            }
+        loadMerchants()
+    }
+
+    private fun selectDeliveryPoint(point: GeoPoint) {
+        selectedLatitude = point.latitude
+        selectedLongitude = point.longitude
+
+        locationLabel.text = String.format(
+            java.util.Locale.US,
+            "Selected location:\nLatitude: %.6f\nLongitude: %.6f",
+            point.latitude,
+            point.longitude
+        )
+
+        val map = mapView ?: return
+
+        deliveryMarker?.let {
+            map.overlays.remove(it)
+        }
+
+        deliveryMarker = Marker(map).apply {
+            position = point
+            title = "Delivery location"
+            setAnchor(
+                Marker.ANCHOR_CENTER,
+                Marker.ANCHOR_BOTTOM
+            )
+        }
+
+        deliveryMarker?.let {
+            map.overlays.add(it)
+        }
+
+        map.invalidate()
     }
 
     private fun heading(text: String, size: Float = 20f) {
         content.addView(TextView(this).apply {
             this.text = text
             textSize = size
+            typeface = Typeface.DEFAULT_BOLD
             setTextColor(Color.rgb(35, 65, 55))
-            setPadding(0, 18, 0, 10)
+            setPadding(0, dp(18), 0, dp(10))
         })
     }
 
-    private fun edit(hintText: String): EditText {
-        val field = EditText(this)
-        field.hint = hintText
-        field.textSize = 16f
-        field.setSingleLine(
-            hintText != "Complete delivery address"
-        )
-        content.addView(field)
-        return field
+    private fun text(value: String) {
+        content.addView(TextView(this).apply {
+            text = value
+            textSize = 14f
+            setTextColor(Color.DKGRAY)
+            setPadding(0, dp(5), 0, dp(8))
+        })
+    }
+
+    private fun makeField(hintText: String): EditText {
+        return EditText(this).apply {
+            hint = hintText
+            textSize = 16f
+            setSingleLine(true)
+            content.addView(
+                this,
+                LinearLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT,
+                    ViewGroup.LayoutParams.WRAP_CONTENT
+                )
+            )
+        }
     }
 
     private fun button(
-        text: String,
+        label: String,
         action: () -> Unit
     ) {
         content.addView(Button(this).apply {
-            this.text = text
+            text = label
             setOnClickListener { action() }
         })
     }
 
     private fun listButton(
         parent: LinearLayout,
-        text: String,
+        label: String,
         action: () -> Unit
     ) {
         parent.addView(Button(this).apply {
-            this.text = text
+            text = label
             setOnClickListener { action() }
         })
     }
 
-    private fun message(text: String) {
+    private fun message(value: String) {
         Toast.makeText(
             this,
-            text,
+            value,
             Toast.LENGTH_LONG
         ).show()
     }
 
+    private fun dp(value: Int): Int {
+        return (value * resources.displayMetrics.density).toInt()
+    }
+
     private fun loadMerchants() {
-        if (loadingMerchants) return
+        if (loadingMerchants || !::merchantList.isInitialized) return
 
         loadingMerchants = true
         merchantList.removeAllViews()
@@ -175,7 +457,7 @@ heading("Delivery Marketplace", 26f)
                         doc.getDouble("deliveryFee")
                             ?: doc.getLong("deliveryFee")?.toDouble()
                             ?: 40.0
-                        )
+                    )
 
                     listButton(
                         merchantList,
@@ -226,11 +508,12 @@ heading("Delivery Marketplace", 26f)
                     val productId = doc.id
                     val productName =
                         doc.getString("name") ?: "Product"
+
                     val price = (
                         doc.getDouble("price")
                             ?: doc.getLong("price")?.toDouble()
                             ?: 0.0
-                        )
+                    )
 
                     listButton(
                         productList,
@@ -282,8 +565,8 @@ heading("Delivery Marketplace", 26f)
         if (placingOrder) return
 
         val user = auth.currentUser
-        if (user == null) {
-            message("Please wait for customer sign-in.")
+        if (user == null || user.isAnonymous) {
+            message("Please log in with your customer account.")
             return
         }
 
@@ -292,18 +575,27 @@ heading("Delivery Marketplace", 26f)
             return
         }
 
+        val latitude = selectedLatitude
+        val longitude = selectedLongitude
+
+        if (latitude == null || longitude == null) {
+            message("Tap the map to select your delivery location.")
+            return
+        }
+
         val name = customerName.text.toString().trim()
         val phone = customerPhone.text.toString().trim()
         val address = deliveryAddress.text.toString().trim()
 
         if (name.isBlank() || phone.isBlank() || address.isBlank()) {
-            message("Enter your name, phone, and delivery address.")
+            message("Enter your name, phone, and full delivery address.")
             return
         }
 
         val subtotal = cart.values.sumOf {
             it.price * it.quantity
         }
+
         val total = subtotal + deliveryFee
 
         val items = cart.values.map {
@@ -321,6 +613,8 @@ heading("Delivery Marketplace", 26f)
             "customerName" to name,
             "customerPhone" to phone,
             "deliveryAddress" to address,
+            "deliveryLatitude" to latitude,
+            "deliveryLongitude" to longitude,
             "merchantId" to merchantId,
             "merchantName" to merchantName,
             "items" to items,
@@ -347,5 +641,21 @@ heading("Delivery Marketplace", 26f)
                 placingOrder = false
                 message("Order failed: ${it.message}")
             }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        mapView?.onResume()
+    }
+
+    override fun onPause() {
+        mapView?.onPause()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        mapView?.onDetach()
+        mapView = null
+        super.onDestroy()
     }
 }
