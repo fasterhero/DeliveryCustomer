@@ -43,6 +43,7 @@ class MainActivity : Activity() {
 private lateinit var homeScroll: ScrollView
 private lateinit var homeFooter: TextView
 private lateinit var searchPreview: TextView
+    private lateinit var searchInput: EditText
 
 private var selectedCategory = "explore"
 private var searchQuery = ""
@@ -110,7 +111,57 @@ setContentView(rootLayout)
             showAuthScreen()
         }
     }
+    
+private fun buildHomeHeader() {
+    val header = LinearLayout(this)
+    header.orientation = LinearLayout.HORIZONTAL
+    header.gravity = Gravity.CENTER_VERTICAL
+    header.setPadding(dp(12), dp(8), dp(12), dp(8))
+    header.setBackgroundColor(Color.WHITE)
 
+    searchInput = EditText(this)
+    searchInput.hint = "Search food, merchants, places"
+    searchInput.singleLine = true
+    searchInput.textSize = 14f
+    searchInput.setCompoundDrawablesWithIntrinsicBounds(
+        android.R.drawable.ic_menu_search,
+        0,
+        0,
+        0
+    )
+    searchInput.setPadding(dp(10), dp(8), dp(10), dp(8))
+
+    val searchBackground = GradientDrawable()
+    searchBackground.setColor(Color.rgb(245, 245, 245))
+    searchBackground.cornerRadius = dp(12).toFloat()
+    searchInput.background = searchBackground
+
+    header.addView(
+        searchInput,
+        LinearLayout.LayoutParams(0, dp(46), 1f)
+    )
+
+    val profileButton = ImageButton(this)
+    profileButton.setImageResource(android.R.drawable.ic_menu_myplaces)
+    profileButton.contentDescription = "Open profile"
+    profileButton.background = null
+    profileButton.setOnClickListener {
+        message("Profile page will be added in the next steps.")
+    }
+
+    header.addView(
+        profileButton,
+        LinearLayout.LayoutParams(dp(48), dp(48))
+    )
+
+    rootLayout.addView(
+        header,
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        )
+    )
+}
     private fun showAuthScreen(register: Boolean = false) {
         content.removeAllViews()
         mapView = null
@@ -220,7 +271,25 @@ setContentView(rootLayout)
     }
 
     private fun showMarketplace(user: FirebaseUser) {
-        content.removeAllViews()
+    content.removeAllViews()
+    rootLayout.removeAllViews()
+
+    loadingMerchants = false
+    loadingProducts = false
+
+    buildHomeHeader()
+
+    rootLayout.addView(
+        bodyScroll,
+        LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            0,
+            1f
+        )
+    )
+
+    // Keep the rest of your existing showMarketplace() code here,
+    // starting with your current heading("Delivery Marketplace")
 
         loadingMerchants = false
         loadingProducts = false
