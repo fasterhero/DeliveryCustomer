@@ -762,8 +762,18 @@ content.addView(
         content.addView(cartLabel)
         updateCart()
 
-        button("Place cash-on-delivery order") {
-            placeOrder()
+        button("Proceed to Checkout") {
+    if (cart.isEmpty()) {
+        message("Please add items to your cart first.")
+        return@button
+    }
+
+    if (merchantId.isBlank()) {
+        message("Please select a merchant first.")
+        return@button
+    }
+
+    showCheckoutScreen()
         }
 
         loadMerchants()
