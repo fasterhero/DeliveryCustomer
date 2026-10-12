@@ -64,6 +64,13 @@ private lateinit var bodyScroll: ScrollView
     private var loadingProducts = false
     private var placingOrder = false
     private var pendingPhone = ""
+    private var savedCustomerName = ""
+private var savedCustomerPhone = ""
+private var savedDeliveryAddress = ""
+
+private lateinit var merchantNoteField: EditText
+private lateinit var riderNoteField: EditText
+
 
     private data class CartLine(
         val id: String,
@@ -474,6 +481,143 @@ private fun buildCategoryShortcuts() {
 }
 
 
+private fun showCheckoutScreen() {
+    val user = auth.currentUser
+
+    if (user == null || user.isAnonymous) {
+        showAuthScreen()
+        return
+    }
+
+    if (merchantId.isBlank() || cart.isEmpty()) {
+        message("Choose a merchant and add products first.")
+        return
+    }
+
+    // Preserve the details already entered on the home screen.
+    if (::customerName.isInitialized) {
+        savedCustomerName = customerName.text.toString().trim()
+    }
+
+    if (::customerPhone.isInitialized) {
+        savedCustomerPhone = customerPhone.text.toString().trim()
+    }
+
+    if (::deliveryAddress.isInitialized) {
+        savedDeliveryAddress =
+            deliveryAddress.text.toString().trim()
+    }
+
+    content.removeAllViews()
+
+    heading("Checkout", 26f)
+    heading("Review your order", 19f)
+
+    text("Merchant: $merchantName")
+
+    val orderSummary = cart.values.joinToString("\n\n") {
+        "${it.name}\n" +
+            "${it.quantity} × ₱${it.price.toInt()} = " +
+            "₱${(it.price * it.quantity).toInt()}"
+    }
+
+    text(orderSummary)
+
+    val subtotal = cart.values.sumOf {
+        it.price * it.quantity
+    }
+
+    heading("Payment summary", 18f)
+
+    text(
+        "Subtotal: ₱${subtotal.toInt()}\n" +
+            "Delivery fee: ₱${deliveryFee.toInt()}\n" +
+            "Total payable: ₱${(subtotal + deliveryFee).toInt()}\n" +
+            "Payment method: Cash on Delivery (COD)"
+    )
+
+    heading("Delivery details", 19f)
+
+    customerName = makeField("Your full name").apply {
+        setText(savedCustomerName)
+    }
+
+    customerPhone = makeField("Mobile number").apply {
+        setText(savedCustomerPhone)
+        inputType = InputType.TYPE_CLASS_PHONE
+    }
+
+    deliveryAddress = makeField(
+        "House number, street, barangay, city"
+    ).apply {
+        setSingleLine(false)
+        minLines = 3
+        maxLines = 5
+        setText(savedDeliveryAddress)
+    }
+
+    val locationText = if (
+        selectedLatitude != null &&
+        selectedLongitude != null
+    ) {
+        String.format(
+            java.util.Locale.US,
+            "Map location selected\nLatitude: %.6f\nLongitude: %.6f",
+            selectedLatitude,
+            selectedLongitude
+        )
+    } else {
+        "No map location selected yet."
+    }
+
+    text(locationText)
+
+    button("Back to map and cart") {
+        savedCustomerName =
+            customerName.text.toString().trim()
+
+        savedCustomerPhone =
+            customerPhone.text.toString().trim()
+
+        savedDeliveryAddress =
+            deliveryAddress.text.toString().trim()
+
+        showMarketplace(user)
+    }
+
+    heading("Notes for merchant", 18f)
+
+    text("Optional: food preparation requests or other order notes.")
+
+    merchantNoteField = makeField(
+        "Example: Please pack the sauce separately."
+    ).apply {
+        setSingleLine(false)
+        minLines = 3
+        maxLines = 5
+        inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE
+    }
+
+    heading("Instructions for rider", 18f)
+
+    text("Optional: gate details, landmarks, or arrival instructions.")
+
+    riderNoteField = makeField(
+        "Example: Blue gate beside the sari-sari store."
+    ).apply {
+        setSingleLine(false)
+        minLines = 3
+        maxLines = 5
+        inputType = InputType.TYPE_CLASS_TEXT or
+            InputType.TYPE_TEXT_FLAG_MULTI_LINE
+    }
+
+    button("Place Order — COD") {
+        placeOrder()
+    }
+}
+
     private fun showAuthScreen(register: Boolean = false) {
         content.removeAllViews()
         mapView = null
@@ -692,21 +836,29 @@ content.addView(
 
         heading("2. Delivery details", 20f)
 
-        customerName = makeField("Your full name").apply {
-            setText(user.displayName ?: "")
-        }
+        
+customerName = makeField("Your full name").apply {
+    setText(savedCustomerName.ifBlank {
+        user.displayName ?: ""
+    })
+}
 
-        customerPhone = makeField("Mobile number").apply {
-            setText(pendingPhone)
-        }
+customerPhone = makeField("Mobile number").apply {
+    setText(savedCustomerPhone.ifBlank {
+        pendingPhone
+    })
+    inputType = InputType.TYPE_CLASS_PHONE
+}
 
-        deliveryAddress = makeField(
-            "Complete delivery address, house number, street, barangay"
-        ).apply {
-            setSingleLine(false)
-            minLines = 2
-            maxLines = 4
-        }
+deliveryAddress = makeField(
+    "Complete delivery address, house number, street, barangay"
+).apply {
+    setSingleLine(false)
+    minLines = 2
+    maxLines = 4
+    setText(savedDeliveryAddress)
+}
+
 
         heading("Available merchants", 20f)
 
@@ -1199,10 +1351,18 @@ private fun updateCart() {
             message("Tap the map to select your delivery location.")
             return
         }
+        
+val name = customerName.text.toString().trim()
+val phone = customerPhone.text.toString().trim()
+val address = deliveryAddress.text.toString().trim()
 
-        val name = customerName.text.toString().trim()
-        val phone = customerPhone.text.toString().trim()
-        val address = deliveryAddress.text.toString().trim()
+savedCustomerName = name
+savedCustomerPhone = phone
+savedDeliveryAddress = address
+
+val merchantNote = merchantNoteField.text.toString().trim()
+val riderNote = riderNoteField.text.toString().trim()
+
 
         if (name.isBlank() || phone.isBlank() || address.isBlank()) {
             message("Enter your name, phone, and full delivery address.")
@@ -1230,6 +1390,8 @@ private fun updateCart() {
             "customerName" to name,
             "customerPhone" to phone,
             "deliveryAddress" to address,
+            "merchantNote" to merchantNote,
+"riderNote" to riderNote,
             "deliveryLatitude" to latitude,
             "deliveryLongitude" to longitude,
             "merchantId" to merchantId,
@@ -1248,12 +1410,16 @@ private fun updateCart() {
 
         db.collection("orders")
             .add(order)
-            .addOnSuccessListener { ref ->
-                placingOrder = false
-                cart.clear()
-                updateCart()
-                message("Order placed! Order ID: ${ref.id}")
-            }
+            
+.addOnSuccessListener { ref ->
+    placingOrder = false
+    cart.clear()
+
+    showMarketplace(user)
+
+    message("Order placed! Order ID: ${ref.id}")
+}
+
             .addOnFailureListener {
                 placingOrder = false
                 message("Order failed: ${it.message}")
