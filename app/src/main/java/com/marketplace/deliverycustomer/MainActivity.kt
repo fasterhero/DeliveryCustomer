@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Context
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.graphics.Bitmap
@@ -16,6 +17,7 @@ import android.graphics.drawable.RippleDrawable
 import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
+import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -88,7 +90,8 @@ class MainActivity : Activity() {
         val eta: String = "25-35 min",
         val rating: Double = 0.0,
         val imageUrl: String = "",
-        val description: String = ""
+        val description: String = "",
+        val phone: String = ""
     )
 
     private data class Product(
@@ -368,6 +371,36 @@ class MainActivity : Activity() {
         "₱" + if (v % 1.0 == 0.0) String.format(Locale.US, "%,.0f", v)
         else String.format(Locale.US, "%,.2f", v)
 
+    private fun dial(phone: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(phone.trim()))))
+        } catch (_: Exception) {
+            toast("No phone app available.")
+        }
+    }
+
+    private fun callButton(
+        label: String,
+        known: String,
+        emptyMsg: String = "Number not available yet.",
+        lookup: (((String) -> Unit) -> Unit)? = null
+    ) = tv(label, 20f, GREEN, true).apply {
+        gravity = Gravity.CENTER
+        contentDescription = if (label.contains("🛵")) "Call rider" else "Call merchant"
+        setPadding(dp(16), dp(10), dp(16), dp(10))
+        background = ripple(shape(Color.WHITE, 26, GREEN))
+        isClickable = true
+        setOnClickListener {
+            if (known.isNotBlank()) {
+                dial(known)
+            } else if (lookup != null) {
+                lookup { p -> if (p.isBlank()) toast(emptyMsg) else dial(p) }
+            } else {
+                toast(emptyMsg)
+            }
+        }
+    }
+
     private fun toast(s: String) = Toast.makeText(this, s, Toast.LENGTH_SHORT).show()
 
     private fun hideKeyboard() {
@@ -592,6 +625,7 @@ class MainActivity : Activity() {
             o.put("mid", m.id)
             o.put("mname", m.name)
             o.put("fee", m.fee)
+            o.put("mphone", m.phone)
             val arr = JSONArray()
             cart.values.forEach {
                 arr.put(
@@ -610,7 +644,10 @@ class MainActivity : Activity() {
         try {
             val s = prefs.getString("cart", null) ?: return
             val o = JSONObject(s)
-            cartMerchant = Merchant(o.getString("mid"), o.getString("mname"), o.getDouble("fee"))
+            cartMerchant = Merchant(
+                o.getString("mid"), o.getString("mname"), o.getDouble("fee"),
+                phone = o.optString("mphone", "")
+            )
             val arr = o.getJSONArray("lines")
             for (i in 0 until arr.length()) {
                 val l = arr.getJSONObject(i)
@@ -650,7 +687,8 @@ class MainActivity : Activity() {
         eta = d.getString("eta") ?: "25-35 min",
         rating = num(d, "rating", 0.0),
         imageUrl = d.getString("imageUrl") ?: "",
-        description = d.getString("description") ?: ""
+        description = d.getString("description") ?: "",
+        phone = d.getString("phone") ?: d.getString("phoneNumber") ?: ""
     )
 
     private fun fetchMerchants(force: Boolean, cb: (Boolean) -> Unit) {
@@ -1454,6 +1492,25 @@ class MainActivity : Activity() {
         pay.addView(tv("✓", 18f, GREEN, true))
         page.addView(pay, lp(MATCH, WRAP))
 
+        page.addView(View(this), lp(MATCH, dp(14)))
+        val contact = hbox()
+        contact.addView(
+            callButton("🏪📞", m.phone) { cb ->
+                db.collection("merchants").document(m.id).get()
+                    .addOnSuccessListener { cb(it.getString("phone") ?: it.getString("phoneNumber") ?: "") }
+                    .addOnFailureListener { cb("") }
+            },
+            lp(WRAP, WRAP, 0f, 0, 0, 12, 0)
+        )
+        contact.addView(
+            callButton(
+                "🛵📞", "",
+                "A rider is assigned after the merchant accepts. You can call them from your order tracking screen."
+            ),
+            lp(WRAP, WRAP)
+        )
+        page.addView(contact, lp(MATCH, WRAP))
+
         sectionTitle(page, "Order summary")
         val sum = card(16)
         sum.addView(tv(m.name, 15f, INK, true), lp(WRAP, WRAP, 0f, 0, 0, 0, 6))
@@ -1505,6 +1562,7 @@ class MainActivity : Activity() {
                 "deliveryLongitude" to lng,
                 "merchantId" to m.id,
                 "merchantName" to m.name,
+                "merchantPhone" to m.phone,
                 "items" to items,
                 "subtotal" to subtotal(),
                 "deliveryFee" to fee(),
@@ -1719,7 +1777,7 @@ class MainActivity : Activity() {
     private fun statusStep(s: String): Int = when (s.lowercase(Locale.US)) {
         "placed", "pending" -> 0
         "accepted", "confirmed" -> 1
-        "preparing", "ready" -> 2
+        "preparing", "ready", "assigned" -> 2
         "picked_up", "pickedup", "on_the_way", "out_for_delivery", "delivering", "in_transit" -> 3
         "delivered", "completed" -> 4
         "cancelled", "canceled", "rejected" -> -1
@@ -1929,6 +1987,32 @@ class MainActivity : Activity() {
                     del.addView(tv("🛵 A rider has been assigned", 13f, GREEN, true), lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
                 }
                 page.addView(del, lp(MATCH, WRAP))
+
+                page.addView(View(this), lp(MATCH, dp(14)))
+                val contact = hbox()
+                val mid = d.getString("merchantId").orEmpty()
+                val rid = d.getString("riderId").orEmpty()
+                contact.addView(
+                    callButton("🏪📞", d.getString("merchantPhone").orEmpty()) { cb ->
+                        db.collection("merchants").document(mid).get()
+                            .addOnSuccessListener { cb(it.getString("phone") ?: it.getString("phoneNumber") ?: "") }
+                            .addOnFailureListener { cb("") }
+                    },
+                    lp(WRAP, WRAP, 0f, 0, 0, 12, 0)
+                )
+                val riderPhone = d.getString("riderPhone").orEmpty()
+                val riderBtn = if (rid.isBlank()) {
+                    callButton("🛵📞", "", "No rider assigned yet. Check back soon.")
+                } else {
+                    callButton("🛵📞", riderPhone, "Rider's number isn't available.") { cb ->
+                        db.collection("riders").document(rid).get()
+                            .addOnSuccessListener { cb(it.getString("phone") ?: it.getString("phoneNumber") ?: "") }
+                            .addOnFailureListener { cb("") }
+                    }
+                }
+                riderBtn.alpha = if (rid.isBlank()) 0.5f else 1f
+                contact.addView(riderBtn, lp(WRAP, WRAP))
+                page.addView(contact, lp(MATCH, WRAP))
 
                 if (step == 0) {
                     page.addView(
