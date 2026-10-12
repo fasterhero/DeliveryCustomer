@@ -107,7 +107,7 @@ class MainActivity : Activity() {
         val name: String,
         val price: Double,
         var qty: Int
-    )
+    ) 
 
     // ───────────────────────── Services / state ─────────────────────────
     private val db by lazy { FirebaseFirestore.getInstance() }
