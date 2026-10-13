@@ -81,38 +81,6 @@ private val STAR = Color.parseColor("#F5A623")
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
-@Suppress("DEPRECATION")
-class MainActivity : Activity() {
-
-    // ───────────────────────── Models ─────────────────────────
-    private data class Merchant(
-        val id: String,
-        val name: String,
-        val fee: Double,
-        val isOpen: Boolean = true,
-        val category: String = "food",
-        val eta: String = "25-35 min",
-        val rating: Double = 0.0,
-        val imageUrl: String = "",
-        val description: String = "",
-        val phone: String = ""
-    )
-
-    private data class Product(
-        val id: String,
-        val name: String,
-        val price: Double,
-        val description: String,
-        val imageUrl: String
-    )
-
-    private data class CartLine(
-        val id: String,
-        val name: String,
-        val price: Double,
-        var qty: Int
-    )
-
     // ───────────────────────── Services / state ─────────────────────────
     private val db by lazy { FirebaseFirestore.getInstance() }
     private val auth by lazy { FirebaseAuth.getInstance() }
