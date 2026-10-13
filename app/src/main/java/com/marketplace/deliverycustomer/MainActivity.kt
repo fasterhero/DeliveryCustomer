@@ -18,6 +18,7 @@ import android.location.Geocoder
 import android.location.Location
 import android.location.LocationManager
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -63,17 +64,19 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
-// ───────────────────────── Design tokens ─────────────────────────
-private val GREEN = Color.parseColor("#1E7B3A")
-private val GREEN_DARK = Color.parseColor("#145A2A")
-private val GREEN_SOFT = Color.parseColor("#E8F5EC")
-private val ORANGE = Color.parseColor("#FF5A1F")
-private val ORANGE_SOFT = Color.parseColor("#FFF1EA")
+// ───────────────────────── Design tokens (yellow theme) ─────────────────────────
+private val YELLOW = Color.parseColor("#FFC21A")
+private val YELLOW_DARK = Color.parseColor("#E2A400")
+private val YELLOW_SOFT = Color.parseColor("#FFF6D6")
+private val OK = Color.parseColor("#1E7B3A")
+private val OK_SOFT = Color.parseColor("#E8F5EC")
+private val ACCENT = Color.parseColor("#F97316")
 private val INK = Color.parseColor("#1F2937")
 private val GREY = Color.parseColor("#6B7280")
 private val LINE = Color.parseColor("#E5E7EB")
-private val BG = Color.parseColor("#F6F7F8")
+private val BG = Color.parseColor("#F7F7F5")
 private val RED = Color.parseColor("#D93025")
+private val STAR = Color.parseColor("#F5A623")
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
@@ -115,7 +118,7 @@ class MainActivity : Activity() {
     private val prefs by lazy { getSharedPreferences("customer_prefs", Context.MODE_PRIVATE) }
     private val uiHandler = Handler(Looper.getMainLooper())
     private val io = Executors.newFixedThreadPool(3)
-    private val imageCache = LruCache<String, Bitmap>(40)
+    private val imageCache = LruCache<String, Bitmap>(60)
 
     private lateinit var headerHost: LinearLayout
     private lateinit var bodyHost: FrameLayout
@@ -140,7 +143,14 @@ class MainActivity : Activity() {
     private val merchantWaiters = mutableListOf<(Boolean) -> Unit>()
     private val productsCache = hashMapOf<String, List<Product>>()
 
+    private var myOrders = listOf<DocumentSnapshot>()
+    private var myOrdersAt = 0L
+    private var myReviews = listOf<DocumentSnapshot>()
+    private var myReviewsAt = 0L
+    private var myReviewsOk = false
+
     private var selectedCategory = "all"
+    private var shopCategory = "all"
     private val cart = linkedMapOf<String, CartLine>()
     private var cartMerchant: Merchant? = null
     private var promoCode: String? = null
@@ -163,13 +173,19 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         Configuration.getInstance().userAgentValue = packageName
         title = "Delivery Marketplace"
-        window.statusBarColor = GREEN
+        window.statusBarColor = YELLOW
+        if (Build.VERSION.SDK_INT >= 23) {
+            window.decorView.systemUiVisibility =
+                window.decorView.systemUiVisibility or View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        }
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             setBackgroundColor(BG)
+            clipChildren = false
+            clipToPadding = false
         }
-        topInset = View(this).apply { setBackgroundColor(GREEN) }
+        topInset = View(this).apply { setBackgroundColor(YELLOW) }
         root.addView(topInset, lp(MATCH, 0))
 
         headerHost = vbox()
@@ -181,22 +197,21 @@ class MainActivity : Activity() {
         cartBarHost = FrameLayout(this)
         root.addView(cartBarHost, lp(MATCH, WRAP))
 
-        navBar = hbox().apply {
+        navBar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.WHITE)
-            elevation = dp(8).toFloat()
+            elevation = dp(6).toFloat()
+            clipChildren = false
+            clipToPadding = false
         }
-        root.addView(navBar, lp(MATCH, dp(60)))
+        root.addView(navBar, lp(MATCH, dp(64)))
 
         bottomInset = View(this).apply { setBackgroundColor(Color.WHITE) }
         root.addView(bottomInset, lp(MATCH, 0))
 
         root.setOnApplyWindowInsetsListener { _, insets ->
-            topInset.layoutParams = topInset.layoutParams.apply {
-                height = insets.systemWindowInsetTop
-            }
-            bottomInset.layoutParams = bottomInset.layoutParams.apply {
-                height = insets.systemWindowInsetBottom
-            }
+            topInset.layoutParams = topInset.layoutParams.apply { height = insets.systemWindowInsetTop }
+            bottomInset.layoutParams = bottomInset.layoutParams.apply { height = insets.systemWindowInsetBottom }
             insets
         }
 
@@ -219,7 +234,11 @@ class MainActivity : Activity() {
     @Suppress("OVERRIDE_DEPRECATION")
     override fun onBackPressed() {
         val b = onBack
-        if (b != null) b() else super.onBackPressed()
+        when {
+            b != null -> b()
+            currentTab != "home" && currentTab != "" -> showHome()
+            else -> super.onBackPressed()
+        }
     }
 
     override fun onResume() {
@@ -262,14 +281,19 @@ class MainActivity : Activity() {
     private fun lp(
         w: Int, h: Int, weight: Float = 0f,
         l: Int = 0, t: Int = 0, r: Int = 0, b: Int = 0
-    ) = LinearLayout.LayoutParams(w, h, weight).apply {
-        setMargins(dp(l), dp(t), dp(r), dp(b))
-    }
+    ) = LinearLayout.LayoutParams(w, h, weight).apply { setMargins(dp(l), dp(t), dp(r), dp(b)) }
 
     private fun shape(fill: Int, radius: Int = 12, stroke: Int = 0): GradientDrawable =
         GradientDrawable().apply {
             setColor(fill)
             cornerRadius = dp(radius).toFloat()
+            if (stroke != 0) setStroke(dp(1), stroke)
+        }
+
+    private fun circle(fill: Int, stroke: Int = 0): GradientDrawable =
+        GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setColor(fill)
             if (stroke != 0) setStroke(dp(1), stroke)
         }
 
@@ -296,8 +320,8 @@ class MainActivity : Activity() {
         background = shape(Color.WHITE, 16, LINE)
     }
 
-    private fun cta(label: String, color: Int = ORANGE, onClick: () -> Unit) =
-        tv(label, 16f, Color.WHITE, true).apply {
+    private fun cta(label: String, color: Int = YELLOW, textColor: Int = INK, onClick: () -> Unit) =
+        tv(label, 16f, textColor, true).apply {
             gravity = Gravity.CENTER
             setPadding(dp(16), dp(15), dp(16), dp(15))
             background = ripple(shape(color, 14))
@@ -305,11 +329,11 @@ class MainActivity : Activity() {
             setOnClickListener { onClick() }
         }
 
-    private fun ghostButton(label: String, color: Int = GREEN, onClick: () -> Unit) =
+    private fun ghostButton(label: String, color: Int = INK, onClick: () -> Unit) =
         tv(label, 15f, color, true).apply {
             gravity = Gravity.CENTER
             setPadding(dp(16), dp(13), dp(16), dp(13))
-            background = ripple(shape(Color.WHITE, 14, color))
+            background = ripple(shape(Color.WHITE, 14, if (color == INK) YELLOW_DARK else color))
             isClickable = true
             setOnClickListener { onClick() }
         }
@@ -371,6 +395,20 @@ class MainActivity : Activity() {
         "₱" + if (v % 1.0 == 0.0) String.format(Locale.US, "%,.0f", v)
         else String.format(Locale.US, "%,.2f", v)
 
+    private fun stars(n: Int) = "★".repeat(n.coerceIn(0, 5)) + "☆".repeat(5 - n.coerceIn(0, 5))
+
+    private fun timeAgo(ts: Timestamp?): String {
+        if (ts == null) return "just now"
+        val mins = (System.currentTimeMillis() - ts.seconds * 1000) / 60000
+        return when {
+            mins < 1 -> "just now"
+            mins < 60 -> "$mins min ago"
+            mins < 1440 -> "${mins / 60} h ago"
+            mins < 43200 -> "${mins / 1440} d ago"
+            else -> "${mins / 43200} mo ago"
+        }
+    }
+
     private fun dial(phone: String) {
         try {
             startActivity(Intent(Intent.ACTION_DIAL, Uri.parse("tel:" + Uri.encode(phone.trim()))))
@@ -384,11 +422,11 @@ class MainActivity : Activity() {
         known: String,
         emptyMsg: String = "Number not available yet.",
         lookup: (((String) -> Unit) -> Unit)? = null
-    ) = tv(label, 20f, GREEN, true).apply {
+    ) = tv(label, 20f, INK, true).apply {
         gravity = Gravity.CENTER
         contentDescription = if (label.contains("🛵")) "Call rider" else "Call merchant"
         setPadding(dp(16), dp(10), dp(16), dp(10))
-        background = ripple(shape(Color.WHITE, 26, GREEN))
+        background = ripple(shape(Color.WHITE, 26, YELLOW_DARK))
         isClickable = true
         setOnClickListener {
             if (known.isNotBlank()) {
@@ -428,6 +466,17 @@ class MainActivity : Activity() {
         }
     }
 
+    private fun emptyState(icon: String, title: String, sub: String): View {
+        val box = vbox().apply {
+            gravity = Gravity.CENTER_HORIZONTAL
+            setPadding(dp(16), dp(36), dp(16), dp(24))
+        }
+        box.addView(tv(icon, 48f))
+        box.addView(tv(title, 17f, INK, true), lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
+        box.addView(tv(sub, 13f, GREY).apply { gravity = Gravity.CENTER }, lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+        return box
+    }
+
     // ───────────────────────── Screen scaffolding ─────────────────────────
     private fun resetScreen() {
         screenToken++
@@ -447,7 +496,7 @@ class MainActivity : Activity() {
             setBackgroundColor(BG)
             overScrollMode = View.OVER_SCROLL_NEVER
         }
-        val page = vbox().apply { setPadding(dp(16), dp(14), dp(16), dp(24)) }
+        val page = vbox().apply { setPadding(dp(16), dp(14), dp(16), dp(28)) }
         sv.addView(page, ViewGroup.LayoutParams(MATCH, WRAP))
         bodyHost.removeAllViews()
         bodyHost.addView(sv, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -464,22 +513,77 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun titleHeader(title: String, back: (() -> Unit)?): View {
+    private fun titleHeader(
+        title: String,
+        back: (() -> Unit)?,
+        subtitle: String? = null,
+        right: View? = null
+    ): View {
         val bar = hbox().apply {
-            setBackgroundColor(GREEN)
-            setPadding(dp(8), dp(10), dp(16), dp(10))
+            setBackgroundColor(YELLOW)
+            setPadding(dp(8), dp(10), dp(12), dp(10))
         }
         if (back != null) {
-            bar.addView(tv("←", 24f, Color.WHITE, true).apply {
+            bar.addView(tv("←", 24f, INK, true).apply {
                 setPadding(dp(12), dp(4), dp(12), dp(4))
                 isClickable = true
+                contentDescription = "Back"
                 setOnClickListener { back() }
             })
         } else {
-            bar.setPadding(dp(16), dp(14), dp(16), dp(14))
+            bar.setPadding(dp(16), dp(14), dp(12), dp(14))
         }
-        bar.addView(tv(title, 19f, Color.WHITE, true))
+        val col = vbox()
+        col.addView(tv(title, 19f, INK, true).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        })
+        if (!subtitle.isNullOrBlank()) {
+            col.addView(tv(subtitle, 12f, INK).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+                alpha = 0.75f
+            })
+        }
+        bar.addView(col, lp(0, WRAP, 1f))
+        if (right != null) bar.addView(right, lp(dp(38), dp(38)))
         return bar
+    }
+
+    private fun locationHeader(placeholder: String): View {
+        val box = vbox().apply {
+            setBackgroundColor(YELLOW)
+            setPadding(dp(16), dp(10), dp(16), dp(14))
+        }
+        val loc = hbox().apply {
+            isClickable = true
+            setOnClickListener {
+                val t = currentTab
+                showLocationPicker { openTab(if (t.isBlank()) "home" else t) }
+            }
+        }
+        loc.addView(tv("📍", 20f))
+        val col = vbox().apply { setPadding(dp(8), 0, 0, 0) }
+        col.addView(tv("Deliver to", 11f, INK).apply { alpha = 0.7f })
+        col.addView(
+            tv((if (addrLabel.isBlank()) "Set your delivery location" else addrLabel) + "  ▾", 14f, INK, true).apply {
+                maxLines = 1
+                ellipsize = TextUtils.TruncateAt.END
+            }
+        )
+        loc.addView(col, lp(0, WRAP, 1f))
+        box.addView(loc, lp(MATCH, WRAP))
+
+        val search = hbox().apply {
+            background = shape(Color.WHITE, 24)
+            setPadding(dp(16), dp(12), dp(16), dp(12))
+            isClickable = true
+            setOnClickListener { showSearch(true) }
+        }
+        search.addView(tv("🔍", 16f))
+        search.addView(tv("  $placeholder", 14f, GREY))
+        box.addView(search, lp(MATCH, WRAP, 0f, 0, 12, 0, 0))
+        return box
     }
 
     private fun setChrome(tab: String?, showCartBar: Boolean) {
@@ -490,10 +594,21 @@ class MainActivity : Activity() {
         refreshCartBar()
     }
 
+    private fun openTab(key: String) {
+        when (key) {
+            "shop" -> showShop()
+            "search" -> showSearch(false)
+            "cart" -> showCart()
+            "profile" -> showProfile()
+            else -> showHome()
+        }
+    }
+
+    /** Bottom bar: Shop · Search · Home · Cart · Profile — selected tab floats in a raised white circle. */
     private fun refreshNav() {
         navBar.removeAllViews()
         val items = listOf(
-            Triple("shop", "🛍️", "Shop"),
+            Triple("shop", "🏪", "Shop"),
             Triple("search", "🔍", "Search"),
             Triple("home", "🏠", "Home"),
             Triple("cart", "🛒", "Cart"),
@@ -501,35 +616,52 @@ class MainActivity : Activity() {
         )
         for ((key, icon, label) in items) {
             val selected = key == currentTab
-            val col = vbox().apply {
-                gravity = Gravity.CENTER
+            val slot = FrameLayout(this).apply {
+                clipChildren = false
+                clipToPadding = false
                 isClickable = true
-                setOnClickListener {
-                    when (key) {
-                        "shop" -> showShop()
-                        "search" -> showSearch()
-                        "home" -> showHome()
-                        "cart" -> showCart()
-                        else -> showProfile()
-                    }
-                }
+                contentDescription = label
+                setOnClickListener { openTab(key) }
             }
-            val iconWrap = FrameLayout(this)
-            iconWrap.addView(tv(icon, 20f).apply { alpha = if (selected) 1f else 0.55f })
-            if (key == "cart" && cartCount() > 0) {
-                iconWrap.addView(
-                    tv("${cartCount()}", 10f, Color.WHITE, true).apply {
+            if (selected) {
+                slot.addView(
+                    tv(icon, 26f).apply {
                         gravity = Gravity.CENTER
-                        minimumWidth = dp(16)
-                        setPadding(dp(3), 0, dp(3), 0)
-                        background = shape(ORANGE, 8)
+                        background = circle(Color.WHITE)
+                        elevation = dp(10).toFloat()
+                        translationY = -dp(22).toFloat()
                     },
-                    FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END)
+                    FrameLayout.LayoutParams(dp(62), dp(62), Gravity.CENTER)
+                )
+            } else if (key == "profile") {
+                slot.addView(
+                    tv(icon, 18f).apply {
+                        gravity = Gravity.CENTER
+                        background = circle(Color.parseColor("#D1D5DB"))
+                    },
+                    FrameLayout.LayoutParams(dp(38), dp(38), Gravity.CENTER)
+                )
+            } else {
+                slot.addView(
+                    tv(icon, 24f).apply { gravity = Gravity.CENTER },
+                    FrameLayout.LayoutParams(MATCH, MATCH, Gravity.CENTER)
                 )
             }
-            col.addView(iconWrap)
-            col.addView(tv(label, 11f, if (selected) GREEN else GREY, selected))
-            navBar.addView(col, lp(0, MATCH, 1f))
+            if (key == "cart" && cartCount() > 0) {
+                slot.addView(
+                    tv("${cartCount()}", 10f, INK, true).apply {
+                        gravity = Gravity.CENTER
+                        minimumWidth = dp(18)
+                        setPadding(dp(4), dp(1), dp(4), dp(1))
+                        background = shape(YELLOW, 9, Color.WHITE)
+                        translationY = if (selected) -dp(22).toFloat() else 0f
+                    },
+                    FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply {
+                        setMargins(0, dp(8), dp(14), 0)
+                    }
+                )
+            }
+            navBar.addView(slot, lp(0, MATCH, 1f))
         }
     }
 
@@ -541,31 +673,30 @@ class MainActivity : Activity() {
         }
         cartBarHost.visibility = View.VISIBLE
         val bar = hbox().apply {
-            background = ripple(shape(ORANGE, 16))
+            background = ripple(shape(INK, 16))
             setPadding(dp(16), dp(14), dp(16), dp(14))
             isClickable = true
             setOnClickListener { showCart() }
         }
         bar.addView(
-            tv("${cartCount()}", 13f, ORANGE, true).apply {
+            tv("${cartCount()}", 13f, INK, true).apply {
                 gravity = Gravity.CENTER
                 minimumWidth = dp(26)
                 setPadding(dp(6), dp(2), dp(6), dp(2))
-                background = shape(Color.WHITE, 8)
+                background = shape(YELLOW, 8)
             }
         )
         bar.addView(tv("  View cart", 16f, Color.WHITE, true), lp(0, WRAP, 1f))
-        bar.addView(tv(money(subtotal()), 16f, Color.WHITE, true))
+        bar.addView(tv(money(subtotal()), 16f, YELLOW, true))
         cartBarHost.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP).apply {
-            setMargins(dp(12), dp(8), dp(12), dp(8))
+            setMargins(dp(12), dp(8), dp(12), dp(26))
         })
     }
 
     // ───────────────────────── Cart logic ─────────────────────────
     private fun cartCount() = cart.values.sumOf { it.qty }
     private fun subtotal() = cart.values.sumOf { it.price * it.qty }
-    private fun fee(): Double =
-        if (promoCode == "FREESHIP") 0.0 else (cartMerchant?.fee ?: 0.0)
+    private fun fee(): Double = if (promoCode == "FREESHIP") 0.0 else (cartMerchant?.fee ?: 0.0)
 
     private fun discount(): Double = when (promoCode) {
         "SAVE20" -> minOf(20.0, subtotal())
@@ -676,6 +807,35 @@ class MainActivity : Activity() {
         }
     }
 
+    // ───────────────────────── Favourites ─────────────────────────
+    private fun favorites(): Set<String> =
+        (prefs.getString("favs", "") ?: "").split(",").filter { it.isNotBlank() }.toSet()
+
+    private fun toggleFav(id: String): Boolean {
+        val s = favorites().toMutableSet()
+        val on = if (s.contains(id)) { s.remove(id); false } else { s.add(id); true }
+        prefs.edit().putString("favs", s.joinToString(",")).apply()
+        return on
+    }
+
+    private fun heartView(m: Merchant): View {
+        val on = favorites().contains(m.id)
+        val h = tv(if (on) "♥" else "♡", 20f, if (on) RED else INK).apply {
+            gravity = Gravity.CENTER
+            background = circle(Color.WHITE)
+            elevation = dp(2).toFloat()
+            isClickable = true
+            contentDescription = "Favourite"
+        }
+        h.setOnClickListener {
+            val nowOn = toggleFav(m.id)
+            h.text = if (nowOn) "♥" else "♡"
+            h.setTextColor(if (nowOn) RED else INK)
+            toast(if (nowOn) "Saved to favourites" else "Removed from favourites")
+        }
+        return h
+    }
+
     // ───────────────────────── Data ─────────────────────────
     private fun num(d: DocumentSnapshot, field: String, def: Double): Double =
         (d.get(field) as? Number)?.toDouble() ?: def
@@ -694,9 +854,7 @@ class MainActivity : Activity() {
     )
 
     private fun fetchMerchants(force: Boolean, cb: (Boolean) -> Unit) {
-        if (merchantsLoaded && !force &&
-            System.currentTimeMillis() - merchantsAt < 60_000
-        ) {
+        if (merchantsLoaded && !force && System.currentTimeMillis() - merchantsAt < 60_000) {
             cb(true)
             return
         }
@@ -722,7 +880,7 @@ class MainActivity : Activity() {
             }
     }
 
-    private fun fetchProducts(m: Merchant, cb: (List<Product>?) -> Unit) {
+    private fun fetchProducts(m: Merchant, silent: Boolean = false, cb: (List<Product>?) -> Unit) {
         productsCache[m.id]?.let { cb(it); return }
         db.collection("merchants").document(m.id).collection("products")
             .whereEqualTo("available", true).get()
@@ -740,9 +898,59 @@ class MainActivity : Activity() {
                 cb(list)
             }
             .addOnFailureListener {
-                toast("Could not load menu: ${it.message}")
+                if (!silent) toast("Could not load menu: ${it.message}")
                 cb(null)
             }
+    }
+
+    /** Loads every merchant's menu (cached) so search can match foods and products. */
+    private fun loadAllProducts(onProgress: (done: Int, total: Int) -> Unit) {
+        val list = merchants
+        if (list.isEmpty()) {
+            onProgress(0, 0)
+            return
+        }
+        var done = 0
+        list.forEach { m ->
+            fetchProducts(m, true) {
+                done++
+                onProgress(done, list.size)
+            }
+        }
+    }
+
+    /** The customer's own orders + reviews (cached for a minute). */
+    private fun loadMyData(force: Boolean, cb: () -> Unit) {
+        val user = auth.currentUser ?: return
+        val now = System.currentTimeMillis()
+        if (!force && now - myOrdersAt < 60_000 && now - myReviewsAt < 60_000) {
+            cb()
+            return
+        }
+        var pending = 2
+        fun done() {
+            pending--
+            if (pending == 0) cb()
+        }
+        db.collection("orders").whereEqualTo("customerId", user.uid).get()
+            .addOnSuccessListener { r ->
+                myOrders = r.documents.sortedByDescending {
+                    (it.get("createdAt") as? Timestamp)?.seconds ?: Long.MAX_VALUE
+                }
+                myOrdersAt = System.currentTimeMillis()
+                done()
+            }
+            .addOnFailureListener { done() }
+        db.collection("reviews").whereEqualTo("customerId", user.uid).get()
+            .addOnSuccessListener { r ->
+                myReviews = r.documents.sortedByDescending {
+                    (it.get("createdAt") as? Timestamp)?.seconds ?: Long.MAX_VALUE
+                }
+                myReviewsAt = System.currentTimeMillis()
+                myReviewsOk = true
+                done()
+            }
+            .addOnFailureListener { done() }
     }
 
     // ───────────────────────── AUTH ─────────────────────────
@@ -758,17 +966,19 @@ class MainActivity : Activity() {
             setPadding(dp(24), dp(48), dp(24), dp(40))
             background = GradientDrawable(
                 GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(GREEN_DARK, GREEN)
+                intArrayOf(YELLOW, Color.parseColor("#FFD55E"))
             ).apply {
                 val r = dp(28).toFloat()
                 cornerRadii = floatArrayOf(0f, 0f, 0f, 0f, r, r, r, r)
             }
         }
         hero.addView(tv("🛵", 46f))
-        hero.addView(tv("Delivery Marketplace", 26f, Color.WHITE, true))
+        hero.addView(tv("Delivery Marketplace", 26f, INK, true))
         hero.addView(
-            tv("Food & essentials delivered to your door", 14f, Color.argb(215, 255, 255, 255))
-                .apply { gravity = Gravity.CENTER },
+            tv("Food & essentials delivered to your door", 14f, INK).apply {
+                gravity = Gravity.CENTER
+                alpha = 0.8f
+            },
             lp(WRAP, WRAP, 0f, 0, 6, 0, 0)
         )
         page.addView(hero, lp(MATCH, WRAP))
@@ -833,6 +1043,8 @@ class MainActivity : Activity() {
                                 .addOnCompleteListener { t ->
                                     val ph = t.result?.getString("phone")
                                     if (!ph.isNullOrBlank()) prefs.edit().putString("phone", ph).apply()
+                                    myOrdersAt = 0L
+                                    myReviewsAt = 0L
                                     showHome()
                                 }
                         }
@@ -878,7 +1090,7 @@ class MainActivity : Activity() {
 
         if (!register) {
             form.addView(
-                tv("Forgot password?", 13f, GREEN, true).apply {
+                tv("Forgot password?", 13f, INK, true).apply {
                     gravity = Gravity.CENTER
                     setPadding(0, dp(14), 0, dp(4))
                     setOnClickListener {
@@ -899,7 +1111,7 @@ class MainActivity : Activity() {
         page.addView(
             tv(
                 if (register) "Already have an account?  Log in" else "New here?  Create an account",
-                15f, GREEN, true
+                15f, INK, true
             ).apply {
                 gravity = Gravity.CENTER
                 setPadding(0, dp(22), 0, dp(10))
@@ -909,46 +1121,250 @@ class MainActivity : Activity() {
         )
     }
 
-    // ───────────────────────── HOME (Default Page) ─────────────────────────
-    private fun homeHeader(): View {
-        val box = vbox().apply {
-            setBackgroundColor(GREEN)
-            setPadding(dp(16), dp(10), dp(16), dp(14))
+    // ───────────────────────── Shared building blocks ─────────────────────────
+    private fun emojiFor(category: String) = when (category) {
+        "all" -> "🍽️"
+        "favorites" -> "❤️"
+        "food" -> "🍔"
+        "convenience" -> "🛍️"
+        "grocery", "groceries" -> "🛒"
+        "pharmacy", "health" -> "💊"
+        "parcel" -> "📦"
+        else -> "🏪"
+    }
+
+    private fun buildChips(
+        row: LinearLayout,
+        items: List<Triple<String, String, String>>,
+        selectedKey: String,
+        onPick: (String) -> Unit
+    ) {
+        row.removeAllViews()
+        for ((key, icon, label) in items) {
+            val selected = key == selectedKey
+            val item = vbox().apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(6), dp(4), dp(6), dp(4))
+                isClickable = true
+                setOnClickListener { onPick(key) }
+            }
+            item.addView(
+                tv(icon, 24f).apply {
+                    gravity = Gravity.CENTER
+                    background = circle(if (selected) YELLOW_SOFT else Color.WHITE, if (selected) YELLOW_DARK else LINE)
+                },
+                lp(dp(58), dp(58))
+            )
+            item.addView(
+                tv(label, 12f, INK, selected).apply {
+                    gravity = Gravity.CENTER
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                },
+                lp(dp(70), WRAP, 0f, 0, 5, 0, 0)
+            )
+            row.addView(item, lp(dp(76), WRAP))
         }
-        val loc = hbox().apply {
+    }
+
+    private fun merchantCard(m: Merchant, onClick: () -> Unit): View {
+        val c = vbox().apply {
+            background = ripple(shape(Color.WHITE, 16, LINE))
             isClickable = true
-            setOnClickListener { showLocationPicker { showHome() } }
+            setOnClickListener { onClick() }
         }
-        loc.addView(tv("📍", 20f))
-        val col = vbox().apply { setPadding(dp(8), 0, 0, 0) }
-        col.addView(tv("Deliver to", 11f, Color.argb(205, 255, 255, 255)))
-        col.addView(
-            tv(
-                (if (addrLabel.isBlank()) "Set your delivery location" else addrLabel) + "  ▾",
-                14f, Color.WHITE, true
-            ).apply {
-                maxLines = 1
-                ellipsize = TextUtils.TruncateAt.END
+        roundClip(c, 16)
+
+        val imgWrap = FrameLayout(this).apply { setBackgroundColor(YELLOW_SOFT) }
+        imgWrap.addView(
+            tv(emojiFor(m.category), 42f).apply { gravity = Gravity.CENTER },
+            FrameLayout.LayoutParams(MATCH, MATCH)
+        )
+        val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        imgWrap.addView(img, FrameLayout.LayoutParams(MATCH, MATCH))
+        loadImage(m.imageUrl, img)
+        if (!m.isOpen) {
+            imgWrap.addView(
+                tv("CLOSED", 15f, Color.WHITE, true).apply {
+                    gravity = Gravity.CENTER
+                    setBackgroundColor(Color.argb(150, 0, 0, 0))
+                },
+                FrameLayout.LayoutParams(MATCH, MATCH)
+            )
+        }
+        imgWrap.addView(
+            heartView(m),
+            FrameLayout.LayoutParams(dp(36), dp(36), Gravity.TOP or Gravity.END).apply {
+                setMargins(0, dp(10), dp(10), 0)
             }
         )
-        loc.addView(col, lp(0, WRAP, 1f))
-        box.addView(loc, lp(MATCH, WRAP))
+        c.addView(imgWrap, lp(MATCH, dp(130)))
 
-        val search = hbox().apply {
-            background = shape(Color.WHITE, 14)
-            setPadding(dp(14), dp(12), dp(14), dp(12))
-            isClickable = true
-            setOnClickListener { showSearch() }
+        val info = vbox().apply { setPadding(dp(14), dp(12), dp(14), dp(14)) }
+        info.addView(tv(m.name, 17f, INK, true))
+        val meta = buildString {
+            append(if (m.rating > 0) "⭐ ${String.format(Locale.US, "%.1f", m.rating)}" else "⭐ New")
+            append("  ·  ").append(m.category.replaceFirstChar { it.uppercase() })
+            append("  ·  ⏱ ").append(m.eta)
         }
-        search.addView(tv("🔍", 16f))
-        search.addView(tv("  Search restaurants or food", 14f, GREY))
-        box.addView(search, lp(MATCH, WRAP, 0f, 0, 12, 0, 0))
+        info.addView(tv(meta, 13f, GREY), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+        info.addView(
+            tv(
+                if (m.fee == 0.0) "🛵 Free delivery" else "🛵 ${money(m.fee)} delivery",
+                12f, INK, true
+            ).apply {
+                setPadding(dp(10), dp(4), dp(10), dp(4))
+                background = shape(YELLOW_SOFT, 8)
+            },
+            lp(WRAP, WRAP, 0f, 0, 8, 0, 0)
+        )
+        c.addView(info)
+        return c
+    }
+
+    /** Compact store row used on the Shop page (logo, name, ETA, fee, heart). */
+    private fun storeRow(m: Merchant, onClick: () -> Unit): View {
+        val row = hbox().apply {
+            background = ripple(shape(Color.WHITE, 16, LINE))
+            setPadding(dp(12), dp(12), dp(12), dp(12))
+            isClickable = true
+            setOnClickListener { onClick() }
+        }
+        val logo = FrameLayout(this).apply { setBackgroundColor(YELLOW_SOFT) }
+        roundClip(logo, 14)
+        logo.addView(tv(emojiFor(m.category), 30f).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
+        val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        logo.addView(img, FrameLayout.LayoutParams(MATCH, MATCH))
+        loadImage(m.imageUrl, img)
+        row.addView(logo, lp(dp(84), dp(84), 0f, 0, 0, 12, 0))
+
+        val col = vbox()
+        col.addView(tv(m.name, 16f, INK, true).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        })
+        col.addView(tv("From ${m.eta}", 13f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 0))
+        col.addView(
+            tv(if (m.fee == 0.0) "🛵 Free delivery" else "🛵 ${money(m.fee)} delivery", 12f, INK, true),
+            lp(WRAP, WRAP, 0f, 0, 4, 0, 0)
+        )
+        if (!m.isOpen) col.addView(tv("Closed now", 12f, RED, true), lp(WRAP, WRAP, 0f, 0, 2, 0, 0))
+        row.addView(col, lp(0, WRAP, 1f))
+        row.addView(heartView(m), lp(dp(36), dp(36)))
+        return row
+    }
+
+    /** ADD button / quantity stepper that stays in sync with the cart. */
+    private fun addControl(m: Merchant, p: Product): View {
+        val host = FrameLayout(this)
+        fun render() {
+            host.removeAllViews()
+            val q = cart[p.id]?.qty ?: 0
+            if (!m.isOpen) {
+                host.addView(tv("Closed", 12f, RED, true))
+            } else if (q == 0) {
+                host.addView(
+                    tv("ADD", 13f, INK, true).apply {
+                        gravity = Gravity.CENTER
+                        setPadding(dp(24), dp(8), dp(24), dp(8))
+                        background = ripple(shape(YELLOW, 10))
+                        isClickable = true
+                        setOnClickListener { addToCart(m, p) }
+                    }
+                )
+            } else {
+                host.addView(stepper(q, { setQty(p.id, q - 1) }, { addToCart(m, p) }))
+            }
+        }
+        render()
+        cartListeners.add { render() }
+        return host
+    }
+
+    private fun stepper(q: Int, onMinus: () -> Unit, onPlus: () -> Unit): View {
+        val box = hbox().apply { background = shape(YELLOW_SOFT, 10, YELLOW_DARK) }
+        fun btn(label: String, cb: () -> Unit) = tv(label, 18f, INK, true).apply {
+            gravity = Gravity.CENTER
+            minimumWidth = dp(36)
+            setPadding(dp(6), dp(4), dp(6), dp(4))
+            isClickable = true
+            setOnClickListener { cb() }
+        }
+        box.addView(btn("−", onMinus))
+        box.addView(tv("$q", 15f, INK, true).apply {
+            gravity = Gravity.CENTER
+            minimumWidth = dp(26)
+        })
+        box.addView(btn("+", onPlus))
         return box
     }
 
+    private fun productRow(m: Merchant, p: Product, subtitle: String? = null, onOpen: (() -> Unit)? = null): View {
+        val row = hbox().apply {
+            background = shape(Color.WHITE, 16, LINE)
+            setPadding(dp(14), dp(14), dp(14), dp(14))
+        }
+        if (onOpen != null) {
+            row.isClickable = true
+            row.setOnClickListener { onOpen() }
+        }
+        val left = vbox()
+        left.addView(tv(p.name, 16f, INK, true))
+        if (!subtitle.isNullOrBlank()) left.addView(tv(subtitle, 12f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 0))
+        if (p.description.isNotBlank()) {
+            left.addView(tv(p.description, 12f, GREY).apply {
+                maxLines = 2
+                ellipsize = TextUtils.TruncateAt.END
+            }, lp(WRAP, WRAP, 0f, 0, 3, 0, 0))
+        }
+        left.addView(tv(money(p.price), 15f, INK, true), lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
+        row.addView(left, lp(0, WRAP, 1f, 0, 0, 10, 0))
+
+        val right = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
+        if (p.imageUrl.isNotBlank()) {
+            val iv = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+            roundClip(iv, 12)
+            right.addView(iv, lp(dp(84), dp(84), 0f, 0, 0, 0, 8))
+            loadImage(p.imageUrl, iv)
+        }
+        right.addView(addControl(m, p), lp(WRAP, WRAP))
+        row.addView(right)
+        return row
+    }
+
+    private fun productCard(m: Merchant, p: Product, onOpen: () -> Unit): View {
+        val c = vbox().apply {
+            background = shape(Color.WHITE, 16, LINE)
+            setPadding(dp(10), dp(10), dp(10), dp(12))
+            isClickable = true
+            setOnClickListener { onOpen() }
+        }
+        val imgWrap = FrameLayout(this).apply { setBackgroundColor(YELLOW_SOFT) }
+        roundClip(imgWrap, 12)
+        imgWrap.addView(tv("🍽️", 34f).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
+        val iv = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
+        imgWrap.addView(iv, FrameLayout.LayoutParams(MATCH, MATCH))
+        loadImage(p.imageUrl, iv)
+        c.addView(imgWrap, lp(MATCH, dp(100)))
+        c.addView(tv(p.name, 14f, INK, true).apply {
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        }, lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
+        c.addView(tv(m.name, 11f, GREY).apply {
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+        })
+        val bottom = hbox()
+        bottom.addView(tv(money(p.price), 14f, INK, true), lp(0, WRAP, 1f))
+        bottom.addView(addControl(m, p))
+        c.addView(bottom, lp(MATCH, WRAP, 0f, 0, 8, 0, 0))
+        return c
+    }
+
+    // ───────────────────────── HOME (default) ─────────────────────────
     private fun showHome() {
         resetScreen()
-        setHeader(homeHeader())
+        setHeader(locationHeader("Search restaurants or food"))
         setChrome("home", true)
         val page = newPage()
         val token = screenToken
@@ -961,28 +1377,26 @@ class MainActivity : Activity() {
             )
         )
 
-        // Category chips
         val chipScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
         val chipRow = hbox()
         chipScroll.addView(chipRow)
         page.addView(chipScroll, lp(MATCH, WRAP, 0f, 0, 12, 0, 0))
 
-        // Promo banner
         val promo = hbox().apply {
             background = GradientDrawable(
                 GradientDrawable.Orientation.LEFT_RIGHT,
-                intArrayOf(GREEN, GREEN_DARK)
+                intArrayOf(YELLOW, Color.parseColor("#FFB300"))
             ).apply { cornerRadius = dp(18).toFloat() }
             setPadding(dp(16), dp(16), dp(16), dp(16))
         }
         val promoText = vbox()
-        promoText.addView(tv("Free delivery today 🎉", 17f, Color.WHITE, true))
-        promoText.addView(tv("Use code FREESHIP at checkout", 13f, Color.argb(225, 255, 255, 255)))
+        promoText.addView(tv("Free delivery today 🎉", 17f, INK, true))
+        promoText.addView(tv("Use code FREESHIP at checkout", 13f, INK).apply { alpha = 0.8f })
         promo.addView(promoText, lp(0, WRAP, 1f))
         promo.addView(
-            tv("APPLY", 13f, GREEN, true).apply {
+            tv("APPLY", 13f, Color.WHITE, true).apply {
                 setPadding(dp(16), dp(9), dp(16), dp(9))
-                background = shape(Color.WHITE, 12)
+                background = shape(INK, 12)
                 setOnClickListener {
                     promoCode = "FREESHIP"
                     refreshCartBar()
@@ -991,6 +1405,9 @@ class MainActivity : Activity() {
             }
         )
         page.addView(promo, lp(MATCH, WRAP, 0f, 0, 14, 0, 0))
+
+        val extra = vbox()
+        page.addView(extra, lp(MATCH, WRAP))
 
         sectionTitle(page, "Restaurants near you")
         val listHost = vbox()
@@ -1009,182 +1426,276 @@ class MainActivity : Activity() {
         }
 
         fun renderChips() {
-            chipRow.removeAllViews()
-            for ((key, icon, label) in categories) {
-                val selected = key == selectedCategory
-                val item = vbox().apply {
-                    gravity = Gravity.CENTER
-                    setPadding(dp(6), dp(4), dp(6), dp(4))
-                    isClickable = true
-                    setOnClickListener {
-                        if (key == "parcel" || key == "pabili") {
-                            toast("$label service is coming soon!")
-                        } else {
-                            selectedCategory = key
-                            renderChips()
-                            renderList()
-                        }
-                    }
+            buildChips(chipRow, categories, selectedCategory) { key ->
+                if (key == "parcel" || key == "pabili") {
+                    toast("${categories.first { it.first == key }.third} service is coming soon!")
+                } else {
+                    selectedCategory = key
+                    renderChips()
+                    renderList()
                 }
-                item.addView(
-                    tv(icon, 24f).apply {
-                        gravity = Gravity.CENTER
-                        background = GradientDrawable().apply {
-                            shape = GradientDrawable.OVAL
-                            setColor(if (selected) GREEN_SOFT else Color.WHITE)
-                            setStroke(dp(if (selected) 2 else 1), if (selected) GREEN else LINE)
-                        }
-                    },
-                    lp(dp(58), dp(58))
+            }
+        }
+
+        fun renderExtras() {
+            extra.removeAllViews()
+            val reviewed = myReviews.map { it.id }.toSet()
+            val delivered = myOrders.filter { statusStep(it.getString("status") ?: "") == 4 }
+
+            val toRate = delivered.firstOrNull { !reviewed.contains(it.id) }
+            if (toRate != null && myReviewsOk) {
+                val b = hbox().apply {
+                    background = shape(YELLOW_SOFT, 16, YELLOW_DARK)
+                    setPadding(dp(14), dp(14), dp(14), dp(14))
+                    isClickable = true
+                    setOnClickListener { showOrderDetail(toRate.id, false) { showHome() } }
+                }
+                b.addView(tv("⭐", 26f))
+                val c = vbox().apply { setPadding(dp(10), 0, 0, 0) }
+                c.addView(tv("How was ${toRate.getString("merchantName") ?: "your order"}?", 15f, INK, true))
+                c.addView(tv("Rate the food and your rider", 12f, GREY))
+                b.addView(c, lp(0, WRAP, 1f))
+                b.addView(tv("Rate ›", 13f, INK, true))
+                extra.addView(b, lp(MATCH, WRAP, 0f, 0, 16, 0, 0))
+            }
+
+            val again = delivered.distinctBy { it.getString("merchantId") }.take(6)
+            if (again.isNotEmpty()) {
+                extra.addView(tv("Order again", 18f, INK, true), lp(MATCH, WRAP, 0f, 0, 18, 0, 8))
+                val hs = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+                val row = hbox()
+                hs.addView(row)
+                again.forEach { d ->
+                    val mm = merchants.firstOrNull { it.id == d.getString("merchantId") }
+                    val c = vbox().apply {
+                        background = ripple(shape(Color.WHITE, 16, LINE))
+                        setPadding(dp(12), dp(12), dp(12), dp(12))
+                        isClickable = true
+                        setOnClickListener { reorder(d) }
+                    }
+                    c.addView(tv(emojiFor(mm?.category ?: "food"), 26f))
+                    c.addView(tv(d.getString("merchantName") ?: "Order", 14f, INK, true).apply {
+                        maxLines = 1
+                        ellipsize = TextUtils.TruncateAt.END
+                    }, lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+                    c.addView(tv(orderItemsSummary(d), 12f, GREY).apply {
+                        maxLines = 2
+                        ellipsize = TextUtils.TruncateAt.END
+                    })
+                    c.addView(tv("Reorder ›", 12f, INK, true), lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
+                    row.addView(c, lp(dp(150), WRAP, 0f, 0, 0, 10, 0))
+                }
+                extra.addView(hs, lp(MATCH, WRAP))
+            }
+        }
+
+        renderChips()
+        if (merchantsLoaded) renderList() else listHost.addView(tv("Loading restaurants…", 14f, GREY))
+        fetchMerchants(false) { ok ->
+            if (token != screenToken) return@fetchMerchants
+            if (ok) {
+                renderList()
+                renderExtras()
+            } else {
+                listHost.removeAllViews()
+                listHost.addView(emptyState("📡", "Couldn't load restaurants", "Check your connection and try again."))
+                listHost.addView(ghostButton("Retry") { showHome() }, lp(MATCH, WRAP, 0f, 0, 10, 0, 0))
+            }
+        }
+        loadMyData(false) { if (token == screenToken) renderExtras() }
+    }
+
+    // ───────────────────────── SHOP ─────────────────────────
+    private fun showShop() {
+        resetScreen()
+        setHeader(locationHeader("Looking for a shop?"))
+        setChrome("shop", true)
+        val page = newPage()
+        val token = screenToken
+
+        page.addView(tv("Shops", 22f, INK, true))
+        page.addView(tv("Browse every restaurant and store in one place.", 13f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 0))
+
+        val chipScroll = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+        val chipRow = hbox()
+        chipScroll.addView(chipRow)
+        page.addView(chipScroll, lp(MATCH, WRAP, 0f, 0, 12, 0, 0))
+
+        val popularHost = vbox()
+        page.addView(popularHost, lp(MATCH, WRAP))
+
+        val titleView = tv("All shops", 18f, INK, true)
+        page.addView(titleView, lp(MATCH, WRAP, 0f, 0, 18, 0, 8))
+        val listHost = vbox()
+        page.addView(listHost, lp(MATCH, WRAP))
+
+        fun renderList() {
+            listHost.removeAllViews()
+            val favs = favorites()
+            val items = merchants.filter {
+                when (shopCategory) {
+                    "all" -> true
+                    "favorites" -> favs.contains(it.id)
+                    else -> it.category == shopCategory
+                }
+            }
+            titleView.text = when (shopCategory) {
+                "all" -> "All shops (${items.size})"
+                "favorites" -> "Favourites (${items.size})"
+                else -> shopCategory.replaceFirstChar { c -> c.uppercase() } + " (${items.size})"
+            }
+            if (items.isEmpty()) {
+                listHost.addView(
+                    emptyState(
+                        if (shopCategory == "favorites") "♡" else "🏪",
+                        if (shopCategory == "favorites") "No favourites yet" else "No shops here yet",
+                        if (shopCategory == "favorites") "Tap the heart on a shop to save it." else "Check back soon."
+                    )
                 )
-                item.addView(tv(label, 12f, if (selected) GREEN else GREY, selected).apply {
-                    gravity = Gravity.CENTER
-                }, lp(WRAP, WRAP, 0f, 0, 5, 0, 0))
-                chipRow.addView(item, lp(dp(74), WRAP))
+                return
+            }
+            items.forEach { m -> listHost.addView(storeRow(m) { showMerchant(m) { showShop() } }, lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
+        }
+
+        fun renderChips() {
+            val cats = merchants.map { it.category }.distinct().sorted()
+            val items = mutableListOf(Triple("all", "🏪", "All shops"), Triple("favorites", "❤️", "Favourites"))
+            cats.forEach { items.add(Triple(it, emojiFor(it), it.replaceFirstChar { c -> c.uppercase() })) }
+            buildChips(chipRow, items, shopCategory) { key ->
+                shopCategory = key
+                renderChips()
+                renderList()
+            }
+        }
+
+        fun renderPopular() {
+            popularHost.removeAllViews()
+            val open = merchants.filter { it.isOpen }.take(4)
+            if (open.isEmpty()) return
+            val all = mutableListOf<Pair<Merchant, Product>>()
+            open.forEach { m -> productsCache[m.id]?.take(4)?.forEach { p -> all.add(m to p) } }
+            if (all.isEmpty()) return
+            popularHost.addView(tv("Popular items", 18f, INK, true), lp(MATCH, WRAP, 0f, 0, 18, 0, 8))
+            val hs = HorizontalScrollView(this).apply { isHorizontalScrollBarEnabled = false }
+            val row = hbox().apply { gravity = Gravity.TOP }
+            hs.addView(row)
+            all.take(12).forEach { (m, p) ->
+                row.addView(productCard(m, p) { showMerchant(m) { showShop() } }, lp(dp(160), WRAP, 0f, 0, 0, 10, 0))
+            }
+            popularHost.addView(hs, lp(MATCH, WRAP))
+        }
+
+        fun loadPopular() {
+            val open = merchants.filter { it.isOpen }.take(4)
+            var left = open.size
+            if (left == 0) return
+            open.forEach { m ->
+                fetchProducts(m, true) {
+                    left--
+                    if (left == 0 && token == screenToken) renderPopular()
+                }
             }
         }
 
         renderChips()
         if (merchantsLoaded) {
             renderList()
+            renderPopular()
+            loadPopular()
         } else {
-            listHost.addView(tv("Loading restaurants…", 14f, GREY))
+            listHost.addView(tv("Loading shops…", 14f, GREY))
         }
         fetchMerchants(false) { ok ->
             if (token != screenToken) return@fetchMerchants
-            if (ok) renderList() else {
+            if (ok) {
+                renderChips()
+                renderList()
+                loadPopular()
+            } else {
                 listHost.removeAllViews()
-                listHost.addView(emptyState("📡", "Couldn't load restaurants", "Check your connection and try again."))
-                listHost.addView(ghostButton("Retry") { showHome() }, lp(MATCH, WRAP, 0f, 0, 10, 0, 0))
+                listHost.addView(emptyState("📡", "Couldn't load shops", "Check your connection and try again."))
             }
         }
     }
 
-    private fun emptyState(icon: String, title: String, sub: String): View {
-        val box = vbox().apply {
-            gravity = Gravity.CENTER_HORIZONTAL
-            setPadding(dp(16), dp(36), dp(16), dp(24))
-        }
-        box.addView(tv(icon, 48f))
-        box.addView(tv(title, 17f, INK, true), lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
-        box.addView(tv(sub, 13f, GREY).apply { gravity = Gravity.CENTER }, lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
-        return box
-    }
-
-    private fun merchantCard(m: Merchant, onClick: () -> Unit): View {
-        val c = vbox().apply {
-            background = ripple(shape(Color.WHITE, 16, LINE))
-            isClickable = true
-            setOnClickListener { onClick() }
-        }
-        roundClip(c, 16)
-
-        val imgWrap = FrameLayout(this).apply { setBackgroundColor(GREEN_SOFT) }
-        imgWrap.addView(
-            tv("🍽️", 42f).apply { gravity = Gravity.CENTER },
-            FrameLayout.LayoutParams(MATCH, MATCH)
-        )
-        val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-        imgWrap.addView(img, FrameLayout.LayoutParams(MATCH, MATCH))
-        loadImage(m.imageUrl, img)
-        if (!m.isOpen) {
-            imgWrap.addView(
-                tv("CLOSED", 15f, Color.WHITE, true).apply {
-                    gravity = Gravity.CENTER
-                    setBackgroundColor(Color.argb(150, 0, 0, 0))
-                },
-                FrameLayout.LayoutParams(MATCH, MATCH)
-            )
-        }
-        c.addView(imgWrap, lp(MATCH, dp(130)))
-
-        val info = vbox().apply { setPadding(dp(14), dp(12), dp(14), dp(14)) }
-        info.addView(tv(m.name, 17f, INK, true))
-        val meta = buildString {
-            append(if (m.rating > 0) "⭐ ${String.format(Locale.US, "%.1f", m.rating)}" else "⭐ New")
-            append("  ·  ").append(m.category.replaceFirstChar { it.uppercase() })
-            append("  ·  ⏱ ").append(m.eta)
-        }
-        info.addView(tv(meta, 13f, GREY), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
-        info.addView(
-            tv(
-                if (m.fee == 0.0) "🛵 Free delivery" else "🛵 ${money(m.fee)} delivery",
-                12f, GREEN, true
-            ).apply {
-                setPadding(dp(10), dp(4), dp(10), dp(4))
-                background = shape(GREEN_SOFT, 8)
-            },
-            lp(WRAP, WRAP, 0f, 0, 8, 0, 0)
-        )
-        c.addView(info)
-        return c
-    }
-
-    // ───────────────────────── SHOP PAGE ─────────────────────────
-    private fun showShop() {
-        resetScreen()
-        setHeader(titleHeader("Shop & Categories", null))
-        setChrome("shop", true)
-        val page = newPage()
-        val token = screenToken
-
-        page.addView(tv("Explore Shops & Services", 20f, INK, true), lp(MATCH, WRAP, 0f, 0, 0, 0, 12))
-
-        val shopListHost = vbox()
-        page.addView(shopListHost, lp(MATCH, WRAP))
-        shopListHost.addView(tv("Loading shops…", 14f, GREY))
-
-        fetchMerchants(false) { ok ->
-            if (token != screenToken) return@fetchMerchants
-            shopListHost.removeAllViews()
-            if (!ok) {
-                shopListHost.addView(emptyState("📡", "Couldn't load shops", "Check your connection."))
-                return@fetchMerchants
-            }
-            if (merchants.isEmpty()) {
-                shopListHost.addView(emptyState("🛍️", "No shops available", "Check back soon."))
-                return@fetchMerchants
-            }
-            merchants.forEach { m ->
-                shopListHost.addView(merchantCard(m) { showMerchant(m) { showShop() } }, lp(MATCH, WRAP, 0f, 0, 0, 0, 14))
-            }
-        }
-    }
-
-    // ───────────────────────── SEARCH PAGE ─────────────────────────
-    private fun showSearch() {
+    // ───────────────────────── SEARCH ─────────────────────────
+    private fun showSearch(focus: Boolean, initial: String = "") {
         resetScreen()
         setChrome("search", true)
         val token = screenToken
 
         val bar = hbox().apply {
-            setBackgroundColor(GREEN)
-            setPadding(dp(16), dp(12), dp(16), dp(12))
+            setBackgroundColor(YELLOW)
+            setPadding(dp(16), dp(12), dp(16), dp(14))
         }
-        val box = inputField("Search restaurants, groceries or items").apply {
+        val box = inputField("Search for restaurants, food and groceries", initial).apply {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
+            setSingleLine(true)
+            background = shape(Color.WHITE, 24)
         }
-        bar.addView(box, lp(MATCH, WRAP, 1f))
+        bar.addView(box, lp(0, WRAP, 1f))
+        bar.addView(tv("✕", 18f, INK, true).apply {
+            setPadding(dp(14), dp(8), dp(4), dp(8))
+            contentDescription = "Clear"
+            setOnClickListener { box.setText("") }
+        })
         setHeader(bar)
 
         val page = newPage()
+        val progress = tv("", 12f, GREY)
+        page.addView(progress)
         val results = vbox()
         page.addView(results, lp(MATCH, WRAP))
+
+        var total = 0
+        var loaded = 0
 
         fun recents(): List<String> =
             (prefs.getString("recent", "") ?: "").split("\n").filter { it.isNotBlank() }
 
         fun remember(q: String) {
-            val list = (listOf(q) + recents().filter { !it.equals(q, true) }).take(5)
+            if (q.isBlank()) return
+            val list = (listOf(q) + recents().filter { !it.equals(q, true) }).take(6)
             prefs.edit().putString("recent", list.joinToString("\n")).apply()
         }
 
-        fun render(query: String) {
+        fun matches(text: String, tokens: List<String>) = tokens.all { text.contains(it) }
+
+        fun render(raw: String) {
+            val query = raw.trim()
             results.removeAllViews()
+            progress.text = if (total > 0 && loaded < total) "Searching menus… $loaded/$total" else ""
+
             if (query.isBlank()) {
+                val quick = listOf(
+                    "🍗" to "Chicken", "🍔" to "Burger", "🍕" to "Pizza", "☕" to "Coffee",
+                    "🍰" to "Cake", "🛒" to "Grocery", "💊" to "Medicine", "🥤" to "Drinks"
+                )
+                results.addView(tv("Popular searches", 16f, INK, true), lp(WRAP, WRAP, 0f, 4, 0, 0, 8))
+                val grid = vbox()
+                quick.chunked(4).forEach { rowItems ->
+                    val r = hbox()
+                    rowItems.forEach { (icon, label) ->
+                        val cell = vbox().apply {
+                            gravity = Gravity.CENTER
+                            setPadding(dp(4), dp(6), dp(4), dp(6))
+                            isClickable = true
+                            setOnClickListener { box.setText(label); box.setSelection(label.length) }
+                        }
+                        cell.addView(
+                            tv(icon, 26f).apply { gravity = Gravity.CENTER; background = circle(YELLOW_SOFT) },
+                            lp(dp(60), dp(60))
+                        )
+                        cell.addView(tv(label, 12f, INK, true), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+                        r.addView(cell, lp(0, WRAP, 1f))
+                    }
+                    grid.addView(r, lp(MATCH, WRAP))
+                }
+                results.addView(grid)
+
                 val rec = recents()
                 if (rec.isNotEmpty()) {
-                    results.addView(tv("Recent searches", 16f, INK, true), lp(WRAP, WRAP, 0f, 0, 0, 0, 8))
+                    results.addView(tv("Recent searches", 16f, INK, true), lp(WRAP, WRAP, 0f, 4, 16, 0, 4))
                     rec.forEach { r ->
                         results.addView(
                             tv("🕘  $r", 15f, INK).apply {
@@ -1194,48 +1705,107 @@ class MainActivity : Activity() {
                         )
                     }
                 }
-                results.addView(tv("Popular near you", 16f, INK, true), lp(WRAP, WRAP, 0f, 0, 14, 0, 8))
-                merchants.filter { it.isOpen }.take(6).forEach { m ->
-                    results.addView(merchantCard(m) { showMerchant(m) { showSearch() } }, lp(MATCH, WRAP, 0f, 0, 0, 0, 12))
+                results.addView(tv("Popular near you", 16f, INK, true), lp(WRAP, WRAP, 0f, 4, 16, 0, 8))
+                merchants.filter { it.isOpen }.take(5).forEach { m ->
+                    results.addView(storeRow(m) { showMerchant(m) { showSearch(false) } }, lp(MATCH, WRAP, 0f, 0, 0, 0, 10))
                 }
                 return
             }
-            val found = merchants.filter {
-                it.name.contains(query, true) || it.category.contains(query, true) ||
-                    it.description.contains(query, true)
+
+            val tokens = query.lowercase(Locale.US).split(" ").filter { it.isNotBlank() }
+            val shops = merchants.filter {
+                matches((it.name + " " + it.category + " " + it.description).lowercase(Locale.US), tokens)
             }
-            if (found.isEmpty()) {
-                results.addView(emptyState("🔎", "No results for \"$query\"", "Try a different restaurant or category."))
-            } else {
-                found.forEach { m ->
-                    results.addView(merchantCard(m) {
-                        remember(query.trim())
-                        showMerchant(m) { showSearch() }
-                    }, lp(MATCH, WRAP, 0f, 0, 0, 0, 12))
+            val foods = mutableListOf<Pair<Merchant, Product>>()
+            merchants.forEach { m ->
+                productsCache[m.id]?.forEach { p ->
+                    val hay = (p.name + " " + p.description + " " + m.category).lowercase(Locale.US)
+                    if (matches(hay, tokens)) foods.add(m to p)
+                }
+            }
+
+            if (shops.isEmpty() && foods.isEmpty()) {
+                results.addView(
+                    emptyState(
+                        "🔎", "No results for \"$query\"",
+                        if (total > 0 && loaded < total) "Still searching menus…" else "Try a different name, food or category."
+                    )
+                )
+                return
+            }
+            if (shops.isNotEmpty()) {
+                results.addView(tv("Restaurants & shops (${shops.size})", 16f, INK, true), lp(WRAP, WRAP, 0f, 4, 6, 0, 8))
+                shops.forEach { m ->
+                    results.addView(storeRow(m) {
+                        remember(query)
+                        showMerchant(m) { showSearch(false, query) }
+                    }, lp(MATCH, WRAP, 0f, 0, 0, 0, 10))
+                }
+            }
+            if (foods.isNotEmpty()) {
+                results.addView(tv("Food & products (${foods.size})", 16f, INK, true), lp(WRAP, WRAP, 0f, 4, 12, 0, 8))
+                foods.take(40).forEach { (m, p) ->
+                    results.addView(
+                        productRow(m, p, "${m.name} · ${m.eta}") {
+                            remember(query)
+                            showMerchant(m) { showSearch(false, query) }
+                        },
+                        lp(MATCH, WRAP, 0f, 0, 0, 0, 10)
+                    )
                 }
             }
         }
 
-        box.onChange { render(it.trim()) }
-        fetchMerchants(false) {
-            if (token == screenToken) render(box.text.toString().trim())
+        var pendingRender: Runnable? = null
+        box.onChange { text ->
+            pendingRender?.let { uiHandler.removeCallbacks(it) }
+            val r = Runnable { if (token == screenToken) render(text) }
+            pendingRender = r
+            uiHandler.postDelayed(r, 120)
         }
-        box.requestFocus()
+        box.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEARCH) {
+                remember(box.text.toString().trim())
+                hideKeyboard()
+                true
+            } else false
+        }
+
+        render(initial)
+        fetchMerchants(false) { ok ->
+            if (token != screenToken || !ok) return@fetchMerchants
+            total = merchants.size
+            render(box.text.toString())
+            loadAllProducts { done, all ->
+                if (token != screenToken) return@loadAllProducts
+                loaded = done
+                total = all
+                render(box.text.toString())
+            }
+        }
+
+        if (focus) {
+            box.requestFocus()
+            uiHandler.postDelayed({
+                val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
+                imm.showSoftInput(box, InputMethodManager.SHOW_IMPLICIT)
+            }, 200)
+        }
     }
 
     // ───────────────────────── MERCHANT / MENU ─────────────────────────
     private fun showMerchant(m: Merchant, back: () -> Unit) {
         resetScreen()
         onBack = back
-        setHeader(titleHeader(m.name, back))
+        setHeader(titleHeader(m.name, back, null, heartView(m)))
         setChrome(null, true)
         val page = newPage()
         val token = screenToken
 
         val hero = vbox().apply { background = shape(Color.WHITE, 16, LINE) }
         roundClip(hero, 16)
-        val imgWrap = FrameLayout(this).apply { setBackgroundColor(GREEN_SOFT) }
-        imgWrap.addView(tv("🍽️", 48f).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
+        val imgWrap = FrameLayout(this).apply { setBackgroundColor(YELLOW_SOFT) }
+        imgWrap.addView(tv(emojiFor(m.category), 48f).apply { gravity = Gravity.CENTER }, FrameLayout.LayoutParams(MATCH, MATCH))
         val img = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
         imgWrap.addView(img, FrameLayout.LayoutParams(MATCH, MATCH))
         loadImage(m.imageUrl, img)
@@ -1246,14 +1816,22 @@ class MainActivity : Activity() {
             info.addView(tv(m.description, 13f, GREY), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
         }
         val chips = hbox()
-        fun chip(t: String) = tv(t, 12f, GREEN, true).apply {
+        fun chip(t: String) = tv(t, 12f, INK, true).apply {
             setPadding(dp(10), dp(5), dp(10), dp(5))
-            background = shape(GREEN_SOFT, 8)
+            background = shape(YELLOW_SOFT, 8)
         }
-        chips.addView(chip(if (m.rating > 0) "⭐ ${String.format(Locale.US, "%.1f", m.rating)}" else "⭐ New"), lp(WRAP, WRAP, 0f, 0, 0, 8, 0))
+        val ratingChip = chip(if (m.rating > 0) "⭐ ${String.format(Locale.US, "%.1f", m.rating)}" else "⭐ New")
+        chips.addView(ratingChip, lp(WRAP, WRAP, 0f, 0, 0, 8, 0))
         chips.addView(chip("⏱ ${m.eta}"), lp(WRAP, WRAP, 0f, 0, 0, 8, 0))
-        chips.addView(chip(if (m.fee == 0.0) "🛵 Free" else "🛵 ${money(m.fee)}"))
-        info.addView(chips, lp(WRAP, WRAP, 0f, 0, 10, 0, 0))
+        chips.addView(chip(if (m.fee == 0.0) "🛵 Free" else "🛵 ${money(m.fee)}"), lp(0, WRAP, 1f))
+        chips.addView(
+            callButton("🏪📞", m.phone) { cb ->
+                db.collection("merchants").document(m.id).get()
+                    .addOnSuccessListener { cb(it.getString("phone") ?: it.getString("phoneNumber") ?: "") }
+                    .addOnFailureListener { cb("") }
+            }
+        )
+        info.addView(chips, lp(MATCH, WRAP, 0f, 0, 10, 0, 0))
         hero.addView(info)
         page.addView(hero, lp(MATCH, WRAP))
 
@@ -1272,6 +1850,10 @@ class MainActivity : Activity() {
         page.addView(menuHost, lp(MATCH, WRAP))
         menuHost.addView(tv("Loading menu…", 14f, GREY))
 
+        sectionTitle(page, "Ratings & reviews")
+        val reviewsHost = vbox()
+        page.addView(reviewsHost, lp(MATCH, WRAP))
+
         fetchProducts(m) { list ->
             if (token != screenToken) return@fetchProducts
             menuHost.removeAllViews()
@@ -1283,85 +1865,52 @@ class MainActivity : Activity() {
                 menuHost.addView(emptyState("🍽️", "No items available", "This merchant has no available products right now."))
                 return@fetchProducts
             }
-            list.forEach { p ->
-                menuHost.addView(productRow(m, p), lp(MATCH, WRAP, 0f, 0, 0, 0, 10))
+            list.forEach { p -> menuHost.addView(productRow(m, p), lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
+        }
+
+        db.collection("reviews").whereEqualTo("merchantId", m.id).limit(40).get()
+            .addOnSuccessListener { r ->
+                if (token != screenToken) return@addOnSuccessListener
+                reviewsHost.removeAllViews()
+                val docs = r.documents.sortedByDescending {
+                    (it.get("createdAt") as? Timestamp)?.seconds ?: Long.MAX_VALUE
+                }
+                if (docs.isEmpty()) {
+                    reviewsHost.addView(tv("No reviews yet — be the first after your order is delivered.", 13f, GREY))
+                    return@addOnSuccessListener
+                }
+                val ratings = docs.mapNotNull { (it.get("merchantRating") as? Number)?.toDouble() }
+                val avg = if (ratings.isEmpty()) 0.0 else ratings.average()
+                ratingChip.text = "⭐ ${String.format(Locale.US, "%.1f", avg)} (${docs.size})"
+                val sum = hbox().apply {
+                    background = shape(YELLOW_SOFT, 14)
+                    setPadding(dp(14), dp(12), dp(14), dp(12))
+                }
+                sum.addView(tv(String.format(Locale.US, "%.1f", avg), 30f, INK, true))
+                val c = vbox().apply { setPadding(dp(12), 0, 0, 0) }
+                c.addView(tv(stars(Math.round(avg).toInt()), 18f, STAR))
+                c.addView(tv("${docs.size} review(s)", 12f, GREY))
+                sum.addView(c)
+                reviewsHost.addView(sum, lp(MATCH, WRAP, 0f, 0, 0, 0, 10))
+                docs.take(8).forEach { reviewsHost.addView(reviewCard(it, false), lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
             }
-        }
-    }
-
-    private fun productRow(m: Merchant, p: Product): View {
-        val row = hbox().apply {
-            background = shape(Color.WHITE, 16, LINE)
-            setPadding(dp(14), dp(14), dp(14), dp(14))
-        }
-        val left = vbox()
-        left.addView(tv(p.name, 16f, INK, true))
-        if (p.description.isNotBlank()) {
-            left.addView(tv(p.description, 12f, GREY).apply {
-                maxLines = 2
-                ellipsize = TextUtils.TruncateAt.END
-            }, lp(WRAP, WRAP, 0f, 0, 3, 0, 0))
-        }
-        left.addView(tv(money(p.price), 15f, GREEN, true), lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
-        row.addView(left, lp(0, WRAP, 1f, 0, 0, 10, 0))
-
-        val right = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
-        if (p.imageUrl.isNotBlank()) {
-            val iv = ImageView(this).apply { scaleType = ImageView.ScaleType.CENTER_CROP }
-            roundClip(iv, 12)
-            right.addView(iv, lp(dp(84), dp(84), 0f, 0, 0, 0, 8))
-            loadImage(p.imageUrl, iv)
-        }
-        val host = FrameLayout(this)
-        right.addView(host, lp(WRAP, WRAP))
-        row.addView(right)
-
-        fun renderStepper() {
-            host.removeAllViews()
-            val q = cart[p.id]?.qty ?: 0
-            if (!m.isOpen) {
-                host.addView(tv("Closed", 12f, RED, true))
-            } else if (q == 0) {
-                host.addView(
-                    tv("ADD", 13f, ORANGE, true).apply {
-                        gravity = Gravity.CENTER
-                        setPadding(dp(24), dp(8), dp(24), dp(8))
-                        background = ripple(shape(ORANGE_SOFT, 10, ORANGE))
-                        isClickable = true
-                        setOnClickListener { addToCart(m, p) }
-                    }
-                )
-            } else {
-                host.addView(stepper(q, { setQty(p.id, q - 1) }, { addToCart(m, p) }))
+            .addOnFailureListener {
+                if (token == screenToken) {
+                    reviewsHost.removeAllViews()
+                    reviewsHost.addView(tv("Reviews are unavailable right now.", 13f, GREY))
+                }
             }
-        }
-        renderStepper()
-        cartListeners.add { renderStepper() }
-        return row
-    }
-
-    private fun stepper(q: Int, onMinus: () -> Unit, onPlus: () -> Unit): View {
-        val box = hbox().apply { background = shape(Color.WHITE, 10, ORANGE) }
-        fun btn(label: String, cb: () -> Unit) = tv(label, 18f, ORANGE, true).apply {
-            gravity = Gravity.CENTER
-            minimumWidth = dp(36)
-            setPadding(dp(6), dp(4), dp(6), dp(4))
-            isClickable = true
-            setOnClickListener { cb() }
-        }
-        box.addView(btn("−", onMinus))
-        box.addView(tv("$q", 15f, INK, true).apply {
-            gravity = Gravity.CENTER
-            minimumWidth = dp(26)
-        })
-        box.addView(btn("+", onPlus))
-        return box
     }
 
     // ───────────────────────── CART ─────────────────────────
     private fun showCart() {
         resetScreen()
-        setHeader(titleHeader("My Cart", null))
+        setHeader(
+            titleHeader(
+                "All carts", null,
+                "Deliver to: " + (if (addrLabel.isBlank()) "set your location" else addrLabel)
+            )
+        )
         setChrome("cart", false)
         val page = newPage()
 
@@ -1370,14 +1919,16 @@ class MainActivity : Activity() {
             val m = cartMerchant
             if (cart.isEmpty() || m == null) {
                 page.addView(emptyState("🛒", "Your cart is empty", "Add something delicious to get started."))
-                page.addView(cta("Browse restaurants", GREEN) { showHome() }, lp(MATCH, WRAP, 0f, 20, 8, 20, 0))
+                page.addView(cta("Browse restaurants") { showHome() }, lp(MATCH, WRAP, 0f, 20, 8, 20, 0))
                 return
             }
 
             val head = hbox()
             head.addView(tv("From ", 14f, GREY))
             head.addView(tv(m.name, 16f, INK, true), lp(0, WRAP, 1f))
-            head.addView(tv("+ Add more", 13f, GREEN, true).apply {
+            head.addView(tv("+ Add more", 13f, INK, true).apply {
+                setPadding(dp(12), dp(6), dp(12), dp(6))
+                background = shape(YELLOW_SOFT, 10)
                 setOnClickListener { showMerchant(m) { showCart() } }
             })
             page.addView(head, lp(MATCH, WRAP, 0f, 0, 0, 0, 10))
@@ -1403,15 +1954,14 @@ class MainActivity : Activity() {
             }
             page.addView(lines, lp(MATCH, WRAP))
 
-            // Promo
             sectionTitle(page, "Promo code")
             val code = promoCode
             if (code != null) {
                 val ok = hbox().apply {
-                    background = shape(GREEN_SOFT, 12)
+                    background = shape(YELLOW_SOFT, 12, YELLOW_DARK)
                     setPadding(dp(14), dp(12), dp(14), dp(12))
                 }
-                ok.addView(tv("✓ $code applied", 14f, GREEN, true), lp(0, WRAP, 1f))
+                ok.addView(tv("✓ $code applied", 14f, INK, true), lp(0, WRAP, 1f))
                 ok.addView(tv("Remove", 13f, RED, true).apply {
                     setOnClickListener { promoCode = null; onCartChanged() }
                 })
@@ -1421,24 +1971,21 @@ class MainActivity : Activity() {
                 val et = inputField("Try FREESHIP or SAVE20", "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS)
                 pr.addView(et, lp(0, WRAP, 1f, 0, 0, 8, 0))
                 pr.addView(
-                    tv("Apply", 14f, Color.WHITE, true).apply {
+                    tv("Apply", 14f, INK, true).apply {
                         gravity = Gravity.CENTER
                         setPadding(dp(20), dp(14), dp(20), dp(14))
-                        background = shape(GREEN, 12)
-                        setOnClickListener {
-                            if (applyPromo(et.text.toString())) onCartChanged()
-                        }
+                        background = shape(YELLOW, 12)
+                        setOnClickListener { if (applyPromo(et.text.toString())) onCartChanged() }
                     }
                 )
                 page.addView(pr, lp(MATCH, WRAP))
             }
 
-            // Summary
             sectionTitle(page, "Payment summary")
             val sum = card(16)
             sum.addView(kv("Subtotal", money(subtotal())))
-            sum.addView(kv("Delivery fee", if (fee() == 0.0) "FREE" else money(fee()), false, if (fee() == 0.0) GREEN else INK))
-            if (discount() > 0) sum.addView(kv("Discount", "-" + money(discount()), false, GREEN))
+            sum.addView(kv("Delivery fee", if (fee() == 0.0) "FREE" else money(fee()), false, if (fee() == 0.0) OK else INK))
+            if (discount() > 0) sum.addView(kv("Discount", "-" + money(discount()), false, OK))
             sum.addView(View(this).apply { setBackgroundColor(LINE) }, lp(MATCH, 1, 0f, 0, 8, 0, 8))
             sum.addView(kv("Total", money(total()), true))
             sum.addView(tv("💵 Pay with cash on delivery", 12f, GREY), lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
@@ -1467,7 +2014,6 @@ class MainActivity : Activity() {
         setChrome(null, false)
         val page = newPage()
 
-        // Address
         sectionTitle(page, "Delivery address")
         val addr = card(14)
         val ar = hbox()
@@ -1478,9 +2024,9 @@ class MainActivity : Activity() {
         )
         acol.addView(tv("Pin your exact spot so the rider finds you.", 12f, GREY))
         ar.addView(acol, lp(0, WRAP, 1f))
-        ar.addView(tv(if (addrLabel.isBlank()) "SET" else "CHANGE", 12f, GREEN, true).apply {
+        ar.addView(tv(if (addrLabel.isBlank()) "SET" else "CHANGE", 12f, INK, true).apply {
             setPadding(dp(12), dp(8), dp(12), dp(8))
-            background = shape(Color.WHITE, 8, GREEN)
+            background = shape(YELLOW_SOFT, 8, YELLOW_DARK)
             setOnClickListener { showLocationPicker { showCheckout() } }
         })
         addr.addView(ar)
@@ -1505,7 +2051,7 @@ class MainActivity : Activity() {
 
         sectionTitle(page, "Payment method")
         val pay = hbox().apply {
-            background = shape(GREEN_SOFT, 14, GREEN)
+            background = shape(YELLOW_SOFT, 14, YELLOW_DARK)
             setPadding(dp(14), dp(14), dp(14), dp(14))
         }
         pay.addView(tv("💵", 22f))
@@ -1513,7 +2059,7 @@ class MainActivity : Activity() {
         pcol.addView(tv("Cash on Delivery", 15f, INK, true))
         pcol.addView(tv("Pay your rider when your order arrives.", 12f, GREY))
         pay.addView(pcol, lp(0, WRAP, 1f))
-        pay.addView(tv("✓", 18f, GREEN, true))
+        pay.addView(tv("✓", 18f, INK, true))
         page.addView(pay, lp(MATCH, WRAP))
 
         page.addView(View(this), lp(MATCH, dp(14)))
@@ -1541,8 +2087,8 @@ class MainActivity : Activity() {
         cart.values.forEach { sum.addView(kv("${it.qty} × ${it.name}", money(it.price * it.qty))) }
         sum.addView(View(this).apply { setBackgroundColor(LINE) }, lp(MATCH, 1, 0f, 0, 8, 0, 8))
         sum.addView(kv("Subtotal", money(subtotal())))
-        sum.addView(kv("Delivery fee", if (fee() == 0.0) "FREE" else money(fee()), false, if (fee() == 0.0) GREEN else INK))
-        if (discount() > 0) sum.addView(kv("Discount", "-" + money(discount()), false, GREEN))
+        sum.addView(kv("Delivery fee", if (fee() == 0.0) "FREE" else money(fee()), false, if (fee() == 0.0) OK else INK))
+        if (discount() > 0) sum.addView(kv("Discount", "-" + money(discount()), false, OK))
         sum.addView(kv("Total", money(total()), true))
         page.addView(sum, lp(MATCH, WRAP))
 
@@ -1608,6 +2154,7 @@ class MainActivity : Activity() {
                     cart.clear()
                     cartMerchant = null
                     promoCode = null
+                    myOrdersAt = 0L
                     saveCart()
                     refreshNav()
                     showOrderDetail(ref.id, true) { showHome() }
@@ -1642,13 +2189,11 @@ class MainActivity : Activity() {
         map.controller.setCenter(GeoPoint(sLat, sLng))
         frame.addView(map, FrameLayout.LayoutParams(MATCH, MATCH))
 
-        // Center pin
         frame.addView(
             tv("📍", 40f).apply { translationY = -dp(20).toFloat() },
             FrameLayout.LayoutParams(WRAP, WRAP, Gravity.CENTER)
         )
 
-        // Search box
         val search = inputField("Search for a street, place or area").apply {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
             elevation = dp(4).toFloat()
@@ -1658,11 +2203,10 @@ class MainActivity : Activity() {
             FrameLayout.LayoutParams(MATCH, WRAP, Gravity.TOP).apply { setMargins(dp(12), dp(12), dp(12), 0) }
         )
 
-        // My-location button
         frame.addView(
-            tv("◎", 24f, GREEN, true).apply {
+            tv("◎", 24f, INK, true).apply {
                 gravity = Gravity.CENTER
-                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(Color.WHITE) }
+                background = circle(Color.WHITE)
                 elevation = dp(4).toFloat()
                 setOnClickListener { moveToMyLocation(map) }
             },
@@ -1672,12 +2216,11 @@ class MainActivity : Activity() {
         )
         wrapper.addView(frame, lp(MATCH, 0, 1f))
 
-        // Bottom sheet
         val sheet = vbox().apply {
             setBackgroundColor(Color.WHITE)
             setPadding(dp(18), dp(16), dp(18), dp(16))
         }
-        sheet.addView(tv("Delivery location", 12f, GREEN, true))
+        sheet.addView(tv("Delivery location", 12f, GREY, true))
         val addrView = tv(if (addrLabel.isBlank()) "Move the map to pick your spot" else addrLabel, 15f, INK, true).apply {
             maxLines = 2
             ellipsize = TextUtils.TruncateAt.END
@@ -1797,7 +2340,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // ───────────────────────── ORDERS / TRACKING ─────────────────────────
+    // ───────────────────────── ORDERS ─────────────────────────
     private fun statusStep(s: String): Int = when (s.lowercase(Locale.US)) {
         "placed", "pending" -> 0
         "accepted", "confirmed" -> 1
@@ -1816,9 +2359,9 @@ class MainActivity : Activity() {
     }
 
     private fun statusColor(s: String): Int = when (statusStep(s)) {
-        4 -> GREEN
+        4 -> OK
         -1 -> RED
-        else -> ORANGE
+        else -> ACCENT
     }
 
     private fun orderDate(d: DocumentSnapshot): String {
@@ -1826,155 +2369,98 @@ class MainActivity : Activity() {
         return SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(ts.seconds * 1000))
     }
 
-    private fun showOrderDetail(orderId: String, justPlaced: Boolean, back: () -> Unit) {
-        resetScreen()
-        onBack = back
-        setHeader(titleHeader("Order details", back))
-        setChrome(null, false)
-        val page = newPage()
-        val token = screenToken
-        page.addView(tv("Loading…", 14f, GREY))
-
-        ordersListener = db.collection("orders").document(orderId)
-            .addSnapshotListener { d, err ->
-                if (token != screenToken) return@addSnapshotListener
-                page.removeAllViews()
-                if (err != null || d == null || !d.exists()) {
-                    page.addView(emptyState("⚠️", "Couldn't load this order", err?.message ?: "It may have been removed."))
-                    return@addSnapshotListener
-                }
-                val status = d.getString("status") ?: "placed"
-                val step = statusStep(status)
-
-                if (justPlaced) {
-                    page.addView(
-                        tv("🎉 Order placed! The merchant has been notified.", 14f, GREEN, true).apply {
-                            setPadding(dp(14), dp(12), dp(14), dp(12))
-                            background = shape(GREEN_SOFT, 12)
-                        },
-                        lp(MATCH, WRAP, 0f, 0, 0, 0, 12)
-                    )
-                }
-
-                val head = card(16)
-                head.addView(tv(d.getString("merchantName") ?: "Order", 20f, INK, true))
-                head.addView(tv("${orderDate(d)}  ·  #${d.id.take(6).uppercase(Locale.US)}", 12f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 12))
-                if (step == -1) {
-                    head.addView(tv("❌ This order was cancelled.", 15f, RED, true))
-                } else {
-                    stepLabels.forEachIndexed { i, label ->
-                        val r = hbox().apply { setPadding(0, dp(5), 0, dp(5)) }
-                        r.addView(
-                            tv(if (i <= step) "●" else "○", 16f, if (i <= step) GREEN else LINE, true),
-                            lp(dp(26), WRAP)
-                        )
-                        r.addView(tv(label, 15f, if (i == step) INK else if (i < step) GREY else LINE, i == step))
-                        head.addView(r)
-                    }
-                }
-                page.addView(head, lp(MATCH, WRAP))
-
-                sectionTitle(page, "Items")
-                val items = card(16)
-                (d.get("items") as? List<*>)?.forEach {
-                    val mp = it as? Map<*, *> ?: return@forEach
-                    items.addView(
-                        kv(
-                            "${(mp["quantity"] as? Number)?.toInt() ?: 1} × ${mp["name"]}",
-                            money((mp["lineTotal"] as? Number)?.toDouble() ?: 0.0)
-                        )
-                    )
-                }
-                items.addView(View(this).apply { setBackgroundColor(LINE) }, lp(MATCH, 1, 0f, 0, 8, 0, 8))
-                items.addView(kv("Subtotal", money(num(d, "subtotal", 0.0))))
-                items.addView(kv("Delivery fee", money(num(d, "deliveryFee", 0.0))))
-                if (num(d, "discount", 0.0) > 0) items.addView(kv("Discount", "-" + money(num(d, "discount", 0.0)), false, GREEN))
-                items.addView(kv("Total (COD)", money(num(d, "total", 0.0)), true))
-                page.addView(items, lp(MATCH, WRAP))
-            }
+    private fun orderItemsSummary(d: DocumentSnapshot): String {
+        val items = d.get("items") as? List<*> ?: return ""
+        return items.mapNotNull {
+            val mp = it as? Map<*, *> ?: return@mapNotNull null
+            "${(mp["quantity"] as? Number)?.toInt() ?: 1}× ${mp["name"]}"
+        }.joinToString(", ")
     }
 
-    // ───────────────────────── PROFILE ─────────────────────────
-    private fun showProfile() {
+    private fun showOrders() {
         val user = auth.currentUser
         if (user == null || user.isAnonymous) { showAuth(false); return }
         resetScreen()
-        setHeader(titleHeader("My Profile", null))
-        setChrome("profile", true)
+        onBack = { showProfile() }
+        setHeader(titleHeader("My Orders", { showProfile() }))
+        setChrome("profile", false)
         val page = newPage()
+        val token = screenToken
+        page.addView(tv("Loading your orders…", 14f, GREY))
+        var lastDocs: List<DocumentSnapshot>? = null
 
-        val hero = vbox().apply { gravity = Gravity.CENTER_HORIZONTAL }
-        val initial = (user.displayName ?: user.email ?: "U").trim().take(1).uppercase(Locale.US)
-        hero.addView(
-            tv(initial, 30f, Color.WHITE, true).apply {
-                gravity = Gravity.CENTER
-                background = GradientDrawable().apply { shape = GradientDrawable.OVAL; setColor(GREEN) }
-            },
-            lp(dp(76), dp(76))
-        )
-        hero.addView(tv(user.displayName ?: "Customer", 20f, INK, true), lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
-        hero.addView(tv(user.email ?: "", 13f, GREY))
-        page.addView(hero, lp(MATCH, WRAP))
-
-        sectionTitle(page, "Personal information")
-        val nameF = inputField("Full name", user.displayName ?: "", InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS)
-        val phoneF = inputField("Mobile number", prefs.getString("phone", "") ?: "", InputType.TYPE_CLASS_PHONE)
-        page.addView(nameF)
-        page.addView(phoneF, lp(MATCH, WRAP, 0f, 0, 8, 0, 0))
-        page.addView(
-            cta("Save profile", GREEN) {
-                val name = nameF.text.toString().trim()
-                val phone = phoneF.text.toString().trim()
-                if (name.isBlank() || phone.isBlank()) {
-                    toast("Enter your name and mobile number.")
-                    return@cta
-                }
-                user.updateProfile(UserProfileChangeRequest.Builder().setDisplayName(name).build())
-                    .addOnSuccessListener {
-                        prefs.edit().putString("phone", phone).apply()
-                        db.collection("customers").document(user.uid)
-                            .set(mapOf("name" to name, "phone" to phone, "email" to (user.email ?: "")))
-                            .addOnSuccessListener { toast("Profile saved") }
-                            .addOnFailureListener { toast("Saved name, but phone failed: ${it.message}") }
-                    }
-                    .addOnFailureListener { toast("Could not update profile: ${it.message}") }
-            },
-            lp(MATCH, WRAP, 0f, 0, 12, 0, 0)
-        )
-
-        sectionTitle(page, "Saved address")
-        val a = card(14)
-        a.addView(tv(if (addrLabel.isBlank()) "No saved location yet" else "📍 $addrLabel", 14f, INK))
-        a.addView(tv("Change location", 13f, GREEN, true).apply {
-            setPadding(0, dp(10), 0, 0)
-            setOnClickListener { showLocationPicker { showProfile() } }
-        })
-        page.addView(a)
-
-        sectionTitle(page, "Account")
-        page.addView(
-            ghostButton("Change password") {
-                val email = user.email
-                if (email.isNullOrBlank()) toast("Your account has no email address.")
-                else auth.sendPasswordResetEmail(email)
-                    .addOnSuccessListener { toast("Password reset sent to $email") }
-                    .addOnFailureListener { toast("Could not send: ${it.message}") }
+        fun render() {
+            val docs = lastDocs ?: return
+            page.removeAllViews()
+            if (docs.isEmpty()) {
+                page.addView(emptyState("🧾", "No orders yet", "Your orders will show up here."))
+                page.addView(cta("Order now") { showHome() }, lp(MATCH, WRAP, 0f, 20, 8, 20, 0))
+                return
             }
-        )
-        page.addView(
-            ghostButton("Log out", RED) {
-                auth.signOut()
-                cart.clear()
-                cartMerchant = null
-                promoCode = null
-                saveCart()
-                showAuth(false)
-            },
-            lp(MATCH, WRAP, 0f, 0, 10, 0, 0)
-        )
-        page.addView(
-            tv("Delivery Marketplace · Customer app", 11f, GREY).apply { gravity = Gravity.CENTER },
-            lp(MATCH, WRAP, 0f, 0, 20, 0, 0)
-        )
+            val reviewed = myReviews.map { it.id }.toSet()
+            val active = docs.filter { statusStep(it.getString("status") ?: "") in 0..3 }
+            val past = docs.filter { statusStep(it.getString("status") ?: "") !in 0..3 }
+            if (active.isNotEmpty()) {
+                page.addView(tv("Active orders", 18f, INK, true), lp(WRAP, WRAP, 0f, 0, 0, 0, 8))
+                active.forEach { page.addView(orderCard(it, reviewed), lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
+            }
+            if (past.isNotEmpty()) {
+                page.addView(tv("Past orders", 18f, INK, true), lp(WRAP, WRAP, 0f, 0, 10, 0, 8))
+                past.forEach { page.addView(orderCard(it, reviewed), lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
+            }
+        }
+
+        ordersListener = db.collection("orders").whereEqualTo("customerId", user.uid)
+            .addSnapshotListener { snap, err ->
+                if (token != screenToken) return@addSnapshotListener
+                if (err != null) {
+                    page.removeAllViews()
+                    page.addView(emptyState("⚠️", "Couldn't load orders", err.message ?: "Please try again."))
+                    return@addSnapshotListener
+                }
+                lastDocs = snap?.documents.orEmpty().sortedByDescending {
+                    (it.get("createdAt") as? Timestamp)?.seconds ?: Long.MAX_VALUE
+                }
+                render()
+            }
+        loadMyData(true) { if (token == screenToken) render() }
     }
-}
+
+    private fun orderCard(d: DocumentSnapshot, reviewed: Set<String>): View {
+        val status = d.getString("status") ?: "placed"
+        val c = card(14).apply {
+            isClickable = true
+            setOnClickListener { showOrderDetail(d.id, false) { showOrders() } }
+        }
+        val top = hbox()
+        top.addView(tv(d.getString("merchantName") ?: "Order", 16f, INK, true), lp(0, WRAP, 1f))
+        top.addView(tv(statusText(status), 11f, Color.WHITE, true).apply {
+            setPadding(dp(10), dp(4), dp(10), dp(4))
+            background = shape(statusColor(status), 10)
+        })
+        c.addView(top)
+        c.addView(tv(orderDate(d), 12f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 6))
+        c.addView(tv(orderItemsSummary(d), 13f, INK).apply {
+            maxLines = 2
+            ellipsize = TextUtils.TruncateAt.END
+        })
+        val bottom = hbox()
+        bottom.addView(tv(money(num(d, "total", 0.0)), 15f, INK, true), lp(0, WRAP, 1f))
+        val step = statusStep(status)
+        if (step == 4 && myReviewsOk && !reviewed.contains(d.id)) {
+            bottom.addView(tv("⭐ Rate", 13f, INK, true).apply {
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                background = shape(YELLOW, 10)
+                setOnClickListener { showOrderDetail(d.id, false) { showOrders() } }
+            }, lp(WRAP, WRAP, 0f, 0, 0, 8, 0))
+        }
+        if (step !in 0..3) {
+            bottom.addView(tv("Reorder", 13f, INK, true).apply {
+                setPadding(dp(14), dp(8), dp(14), dp(8))
+                background = shape(YELLOW_SOFT, 10, YELLOW_DARK)
+                setOnClickListener { reorder(d) }
+            })
+        } else {
+            bottom.addView(tv("Track ›", 13f, INK, true))
+        }
+        c.addView(bottom, 
