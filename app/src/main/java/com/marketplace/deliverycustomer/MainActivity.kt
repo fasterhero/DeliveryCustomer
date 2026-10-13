@@ -633,7 +633,6 @@ class MainActivity : Activity() {
                 isClickable = true
                 contentDescription = label
                 setOnClickListener {
-                    // Animation effect on tap
                     animate().scaleX(0.9f).scaleY(0.9f).setDuration(80).withEndAction {
                         animate().scaleX(1f).scaleY(1f).setDuration(80).start()
                         openTab(key)
@@ -751,7 +750,7 @@ class MainActivity : Activity() {
                 cardView.addView(statusBox, lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
 
                 val detailsContainer = vbox().apply { visibility = View.GONE }
-                detailsContainer.addView(View(context).apply { setBackgroundColor(LINE) }, lp(MATCH, 1, 0f, 0, 8, 0, 8))
+                detailsContainer.addView(View(this@MainActivity).apply { setBackgroundColor(LINE) }, lp(MATCH, 1, 0f, 0, 8, 0, 8))
                 detailsContainer.addView(tv("Items: " + orderItemsSummary(active), 13f, INK))
                 detailsContainer.addView(tv("Total: " + money(num(active, "total", 0.0)), 14f, INK, true), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
                 detailsContainer.addView(ghostButton("Tap to view live tracking & details") {
@@ -760,7 +759,6 @@ class MainActivity : Activity() {
                 
                 cardView.addView(detailsContainer)
 
-                // Drag/Touch and Tap toggle handlers for expanding/collapsing details
                 var dY = 0f
                 var isExpanded = false
                 cardView.setOnTouchListener { _, event ->
@@ -2629,7 +2627,6 @@ class MainActivity : Activity() {
         )
     }
 
-    // Order detail view stub
     private fun showOrderDetail(orderId: String, trackingMode: Boolean, back: () -> Unit) {
         resetScreen()
         onBack = back
