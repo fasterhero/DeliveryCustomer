@@ -107,7 +107,7 @@ class MainActivity : Activity() {
         val name: String,
         val price: Double,
         var qty: Int
-    ) 
+    )
 
     // ───────────────────────── Services / state ─────────────────────────
     private val db by lazy { FirebaseFirestore.getInstance() }
@@ -493,8 +493,9 @@ class MainActivity : Activity() {
     private fun refreshNav() {
         navBar.removeAllViews()
         val items = listOf(
+            Triple("shop", "🛍️", "Shop"),
+            Triple("search", "🔍", "Search"),
             Triple("home", "🏠", "Home"),
-            Triple("orders", "🧾", "Orders"),
             Triple("cart", "🛒", "Cart"),
             Triple("profile", "👤", "Profile")
         )
@@ -505,8 +506,9 @@ class MainActivity : Activity() {
                 isClickable = true
                 setOnClickListener {
                     when (key) {
+                        "shop" -> showShop()
+                        "search" -> showSearch()
                         "home" -> showHome()
-                        "orders" -> showOrders()
                         "cart" -> showCart()
                         else -> showProfile()
                     }
@@ -907,7 +909,7 @@ class MainActivity : Activity() {
         )
     }
 
-    // ───────────────────────── HOME ─────────────────────────
+    // ───────────────────────── HOME (Default Page) ─────────────────────────
     private fun homeHeader(): View {
         val box = vbox().apply {
             setBackgroundColor(GREEN)
@@ -1118,25 +1120,51 @@ class MainActivity : Activity() {
         return c
     }
 
-    // ───────────────────────── SEARCH ─────────────────────────
+    // ───────────────────────── SHOP PAGE ─────────────────────────
+    private fun showShop() {
+        resetScreen()
+        setHeader(titleHeader("Shop & Categories", null))
+        setChrome("shop", true)
+        val page = newPage()
+        val token = screenToken
+
+        page.addView(tv("Explore Shops & Services", 20f, INK, true), lp(MATCH, WRAP, 0f, 0, 0, 0, 12))
+
+        val shopListHost = vbox()
+        page.addView(shopListHost, lp(MATCH, WRAP))
+        shopListHost.addView(tv("Loading shops…", 14f, GREY))
+
+        fetchMerchants(false) { ok ->
+            if (token != screenToken) return@fetchMerchants
+            shopListHost.removeAllViews()
+            if (!ok) {
+                shopListHost.addView(emptyState("📡", "Couldn't load shops", "Check your connection."))
+                return@fetchMerchants
+            }
+            if (merchants.isEmpty()) {
+                shopListHost.addView(emptyState("🛍️", "No shops available", "Check back soon."))
+                return@fetchMerchants
+            }
+            merchants.forEach { m ->
+                shopListHost.addView(merchantCard(m) { showMerchant(m) { showShop() } }, lp(MATCH, WRAP, 0f, 0, 0, 0, 14))
+            }
+        }
+    }
+
+    // ───────────────────────── SEARCH PAGE ─────────────────────────
     private fun showSearch() {
         resetScreen()
-        onBack = { showHome() }
-        setChrome(null, false)
+        setChrome("search", true)
         val token = screenToken
 
         val bar = hbox().apply {
             setBackgroundColor(GREEN)
-            setPadding(dp(8), dp(10), dp(16), dp(10))
+            setPadding(dp(16), dp(12), dp(16), dp(12))
         }
-        bar.addView(tv("←", 24f, Color.WHITE, true).apply {
-            setPadding(dp(12), dp(4), dp(12), dp(4))
-            setOnClickListener { showHome() }
-        })
-        val box = inputField("Search restaurants or food").apply {
+        val box = inputField("Search restaurants, groceries or items").apply {
             imeOptions = EditorInfo.IME_ACTION_SEARCH
         }
-        bar.addView(box, lp(0, WRAP, 1f))
+        bar.addView(box, lp(MATCH, WRAP, 1f))
         setHeader(bar)
 
         val page = newPage()
@@ -1193,10 +1221,6 @@ class MainActivity : Activity() {
             if (token == screenToken) render(box.text.toString().trim())
         }
         box.requestFocus()
-        uiHandler.postDelayed({
-            val imm = getSystemService(Context.INPUT_METHOD_SERVICE) as InputMethodManager
-            imm.showSoftInput(box, InputMethodManager.SHOW_IMPLICIT)
-        }, 200)
     }
 
     // ───────────────────────── MERCHANT / MENU ─────────────────────────
@@ -1773,7 +1797,7 @@ class MainActivity : Activity() {
         }
     }
 
-    // ───────────────────────── ORDERS ─────────────────────────
+    // ───────────────────────── ORDERS / TRACKING ─────────────────────────
     private fun statusStep(s: String): Int = when (s.lowercase(Locale.US)) {
         "placed", "pending" -> 0
         "accepted", "confirmed" -> 1
@@ -1802,119 +1826,11 @@ class MainActivity : Activity() {
         return SimpleDateFormat("MMM d, h:mm a", Locale.getDefault()).format(Date(ts.seconds * 1000))
     }
 
-    private fun showOrders() {
-        val user = auth.currentUser
-        if (user == null || user.isAnonymous) { showAuth(false); return }
-        resetScreen()
-        setHeader(titleHeader("My Orders", null))
-        setChrome("orders", true)
-        val page = newPage()
-        val token = screenToken
-        page.addView(tv("Loading your orders…", 14f, GREY))
-
-        ordersListener = db.collection("orders").whereEqualTo("customerId", user.uid)
-            .addSnapshotListener { snap, err ->
-                if (token != screenToken) return@addSnapshotListener
-                page.removeAllViews()
-                if (err != null) {
-                    page.addView(emptyState("⚠️", "Couldn't load orders", err.message ?: "Please try again."))
-                    return@addSnapshotListener
-                }
-                val docs = snap?.documents.orEmpty().sortedByDescending {
-                    (it.get("createdAt") as? Timestamp)?.seconds ?: Long.MAX_VALUE
-                }
-                if (docs.isEmpty()) {
-                    page.addView(emptyState("🧾", "No orders yet", "Your orders will show up here."))
-                    page.addView(cta("Order now", GREEN) { showHome() }, lp(MATCH, WRAP, 0f, 20, 8, 20, 0))
-                    return@addSnapshotListener
-                }
-                val active = docs.filter { statusStep(it.getString("status") ?: "") in 0..3 }
-                val past = docs.filter { statusStep(it.getString("status") ?: "") !in 0..3 }
-                if (active.isNotEmpty()) {
-                    page.addView(tv("Active orders", 18f, INK, true), lp(WRAP, WRAP, 0f, 0, 0, 0, 8))
-                    active.forEach { page.addView(orderCard(it), lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
-                }
-                if (past.isNotEmpty()) {
-                    page.addView(tv("Past orders", 18f, INK, true), lp(WRAP, WRAP, 0f, 0, 10, 0, 8))
-                    past.forEach { page.addView(orderCard(it), lp(MATCH, WRAP, 0f, 0, 0, 0, 10)) }
-                }
-            }
-    }
-
-    private fun orderItemsSummary(d: DocumentSnapshot): String {
-        val items = d.get("items") as? List<*> ?: return ""
-        return items.mapNotNull {
-            val mp = it as? Map<*, *> ?: return@mapNotNull null
-            "${(mp["quantity"] as? Number)?.toInt() ?: 1}× ${mp["name"]}"
-        }.joinToString(", ")
-    }
-
-    private fun orderCard(d: DocumentSnapshot): View {
-        val status = d.getString("status") ?: "placed"
-        val c = card(14).apply {
-            isClickable = true
-            setOnClickListener { showOrderDetail(d.id, false) { showOrders() } }
-        }
-        val top = hbox()
-        top.addView(tv(d.getString("merchantName") ?: "Order", 16f, INK, true), lp(0, WRAP, 1f))
-        top.addView(tv(statusText(status), 11f, Color.WHITE, true).apply {
-            setPadding(dp(10), dp(4), dp(10), dp(4))
-            background = shape(statusColor(status), 10)
-        })
-        c.addView(top)
-        c.addView(tv(orderDate(d), 12f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 6))
-        c.addView(tv(orderItemsSummary(d), 13f, INK).apply {
-            maxLines = 2
-            ellipsize = TextUtils.TruncateAt.END
-        })
-        val bottom = hbox()
-        bottom.addView(tv(money(num(d, "total", 0.0)), 15f, GREEN, true), lp(0, WRAP, 1f))
-        if (statusStep(status) !in 0..3) {
-            bottom.addView(tv("Reorder", 13f, ORANGE, true).apply {
-                setPadding(dp(14), dp(8), dp(14), dp(8))
-                background = shape(ORANGE_SOFT, 10, ORANGE)
-                setOnClickListener { reorder(d) }
-            })
-        } else {
-            bottom.addView(tv("Track ›", 13f, GREEN, true))
-        }
-        c.addView(bottom, lp(MATCH, WRAP, 0f, 0, 10, 0, 0))
-        return c
-    }
-
-    private fun reorder(d: DocumentSnapshot) {
-        val mid = d.getString("merchantId") ?: return
-        val items = d.get("items") as? List<*> ?: return
-        db.collection("merchants").document(mid).get()
-            .addOnSuccessListener { md ->
-                if (!md.exists()) { toast("This merchant is no longer available."); return@addOnSuccessListener }
-                val m = toMerchant(md)
-                if (!m.isOpen) { toast("${m.name} is closed right now."); return@addOnSuccessListener }
-                cart.clear()
-                promoCode = null
-                cartMerchant = m
-                items.forEach {
-                    val mp = it as? Map<*, *> ?: return@forEach
-                    val id = mp["productId"] as? String ?: return@forEach
-                    cart[id] = CartLine(
-                        id,
-                        mp["name"] as? String ?: "Item",
-                        (mp["unitPrice"] as? Number)?.toDouble() ?: 0.0,
-                        (mp["quantity"] as? Number)?.toInt() ?: 1
-                    )
-                }
-                saveCart()
-                toast("Items added to your cart")
-                showCart()
-            }
-            .addOnFailureListener { toast("Couldn't reorder: ${it.message}") }
-    }
-
     private fun showOrderDetail(orderId: String, justPlaced: Boolean, back: () -> Unit) {
         resetScreen()
         onBack = back
         setHeader(titleHeader("Order details", back))
-        setChrome("orders", false)
+        setChrome(null, false)
         val page = newPage()
         val token = screenToken
         page.addView(tv("Loading…", 14f, GREY))
@@ -1975,63 +1891,6 @@ class MainActivity : Activity() {
                 if (num(d, "discount", 0.0) > 0) items.addView(kv("Discount", "-" + money(num(d, "discount", 0.0)), false, GREEN))
                 items.addView(kv("Total (COD)", money(num(d, "total", 0.0)), true))
                 page.addView(items, lp(MATCH, WRAP))
-
-                sectionTitle(page, "Delivery")
-                val del = card(16)
-                del.addView(tv(d.getString("deliveryAddress") ?: "", 14f, INK))
-                val mn = d.getString("merchantNote").orEmpty()
-                val rn = d.getString("riderNote").orEmpty()
-                if (mn.isNotBlank()) del.addView(tv("Merchant note: $mn", 12f, GREY), lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
-                if (rn.isNotBlank()) del.addView(tv("Rider note: $rn", 12f, GREY), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
-                if (!d.getString("riderId").isNullOrBlank()) {
-                    del.addView(tv("🛵 A rider has been assigned", 13f, GREEN, true), lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
-                }
-                page.addView(del, lp(MATCH, WRAP))
-
-                page.addView(View(this), lp(MATCH, dp(14)))
-                val contact = hbox()
-                val mid = d.getString("merchantId").orEmpty()
-                val rid = d.getString("riderId").orEmpty()
-                contact.addView(
-                    callButton("🏪📞", d.getString("merchantPhone").orEmpty()) { cb ->
-                        db.collection("merchants").document(mid).get()
-                            .addOnSuccessListener { cb(it.getString("phone") ?: it.getString("phoneNumber") ?: "") }
-                            .addOnFailureListener { cb("") }
-                    },
-                    lp(WRAP, WRAP, 0f, 0, 0, 12, 0)
-                )
-                val riderPhone = d.getString("riderPhone").orEmpty()
-                val riderBtn = if (rid.isBlank()) {
-                    callButton("🛵📞", "", "No rider assigned yet. Check back soon.")
-                } else {
-                    callButton("🛵📞", riderPhone, "Rider's number isn't available.") { cb ->
-                        db.collection("riders").document(rid).get()
-                            .addOnSuccessListener { cb(it.getString("phone") ?: it.getString("phoneNumber") ?: "") }
-                            .addOnFailureListener { cb("") }
-                    }
-                }
-                riderBtn.alpha = if (rid.isBlank()) 0.5f else 1f
-                contact.addView(riderBtn, lp(WRAP, WRAP))
-                page.addView(contact, lp(MATCH, WRAP))
-
-                if (step == 0) {
-                    page.addView(
-                        ghostButton("Cancel order", RED) {
-                            AlertDialog.Builder(this)
-                                .setTitle("Cancel this order?")
-                                .setMessage("The merchant hasn't accepted it yet, so you can cancel for free.")
-                                .setPositiveButton("Yes, cancel") { _, _ ->
-                                    db.collection("orders").document(d.id).update("status", "cancelled")
-                                        .addOnFailureListener { toast("Couldn't cancel: ${it.message}") }
-                                }
-                                .setNegativeButton("Keep order", null)
-                                .show()
-                        },
-                        lp(MATCH, WRAP, 0f, 0, 16, 0, 0)
-                    )
-                } else if (step == 4 || step == -1) {
-                    page.addView(cta("Reorder") { reorder(d) }, lp(MATCH, WRAP, 0f, 0, 16, 0, 0))
-                }
             }
     }
 
