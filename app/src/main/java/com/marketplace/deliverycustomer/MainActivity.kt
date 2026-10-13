@@ -81,6 +81,9 @@ private val STAR = Color.parseColor("#F5A623")
 private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
 private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
 
+@Suppress("DEPRECATION")
+class MainActivity : Activity() {
+
     // ───────────────────────── Services / state ─────────────────────────
     private val db by lazy { FirebaseFirestore.getInstance() }
     private val auth by lazy { FirebaseAuth.getInstance() }
