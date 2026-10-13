@@ -28,6 +28,7 @@ import android.text.TextUtils
 import android.text.TextWatcher
 import android.util.LruCache
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
@@ -122,6 +123,7 @@ class MainActivity : Activity() {
 
     private lateinit var headerHost: LinearLayout
     private lateinit var bodyHost: FrameLayout
+    private lateinit var floatingTrackerHost: FrameLayout
     private lateinit var cartBarHost: FrameLayout
     private lateinit var navBar: LinearLayout
     private lateinit var topInset: View
@@ -129,10 +131,11 @@ class MainActivity : Activity() {
 
     private var screenToken = 0
     private var onBack: (() -> Unit)? = null
-    private var currentTab = ""
+    private var currentTab = "home"
     private var cartBarAllowed = false
     private val cartListeners = mutableListOf<() -> Unit>()
     private var ordersListener: ListenerRegistration? = null
+    private var floatingOrderListener: ListenerRegistration? = null
     private var mapView: MapView? = null
     private var pendingLocationAction: (() -> Unit)? = null
 
@@ -194,17 +197,23 @@ class MainActivity : Activity() {
         bodyHost = FrameLayout(this)
         root.addView(bodyHost, lp(MATCH, 0, 1f))
 
+        floatingTrackerHost = FrameLayout(this).apply {
+            clipChildren = false
+            clipToPadding = false
+        }
+        root.addView(floatingTrackerHost, lp(MATCH, WRAP))
+
         cartBarHost = FrameLayout(this)
         root.addView(cartBarHost, lp(MATCH, WRAP))
 
         navBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             setBackgroundColor(Color.WHITE)
-            elevation = dp(6).toFloat()
+            elevation = dp(12).toFloat()
             clipChildren = false
             clipToPadding = false
         }
-        root.addView(navBar, lp(MATCH, dp(64)))
+        root.addView(navBar, lp(MATCH, dp(70)))
 
         bottomInset = View(this).apply { setBackgroundColor(Color.WHITE) }
         root.addView(bottomInset, lp(MATCH, 0))
@@ -225,6 +234,7 @@ class MainActivity : Activity() {
         val user = auth.currentUser
         if (user != null && !user.isAnonymous) {
             showHome()
+            setupFloatingOrderTracker()
         } else {
             if (user?.isAnonymous == true) auth.signOut()
             showAuth(false)
@@ -253,6 +263,7 @@ class MainActivity : Activity() {
 
     override fun onDestroy() {
         ordersListener?.remove()
+        floatingOrderListener?.remove()
         mapView?.onDetach()
         mapView = null
         io.shutdown()
@@ -323,7 +334,7 @@ class MainActivity : Activity() {
     private fun cta(label: String, color: Int = YELLOW, textColor: Int = INK, onClick: () -> Unit) =
         tv(label, 16f, textColor, true).apply {
             gravity = Gravity.CENTER
-            setPadding(dp(16), dp(15), dp(16), dp(15))
+            setPadding(dp(16), dp(16), dp(16), dp(16))
             background = ripple(shape(color, 14))
             isClickable = true
             setOnClickListener { onClick() }
@@ -496,7 +507,7 @@ class MainActivity : Activity() {
             setBackgroundColor(BG)
             overScrollMode = View.OVER_SCROLL_NEVER
         }
-        val page = vbox().apply { setPadding(dp(16), dp(14), dp(16), dp(28)) }
+        val page = vbox().apply { setPadding(dp(16), dp(14), dp(16), dp(84)) }
         sv.addView(page, ViewGroup.LayoutParams(MATCH, WRAP))
         bodyHost.removeAllViews()
         bodyHost.addView(sv, FrameLayout.LayoutParams(MATCH, MATCH))
@@ -604,7 +615,7 @@ class MainActivity : Activity() {
         }
     }
 
-    /** Bottom bar: Shop · Search · Home · Cart · Profile — selected tab floats in a raised white circle. */
+    /** Bottom bar: Shop · Search · Home · Cart · Profile — selected tab floats in a raised white circle with smooth scaling animation. */
     private fun refreshNav() {
         navBar.removeAllViews()
         val items = listOf(
@@ -621,25 +632,31 @@ class MainActivity : Activity() {
                 clipToPadding = false
                 isClickable = true
                 contentDescription = label
-                setOnClickListener { openTab(key) }
+                setOnClickListener {
+                    // Animation effect on tap
+                    animate().scaleX(0.9f).scaleY(0.9f).setDuration(80).withEndAction {
+                        animate().scaleX(1f).scaleY(1f).setDuration(80).start()
+                        openTab(key)
+                    }.start()
+                }
             }
             if (selected) {
                 slot.addView(
                     tv(icon, 26f).apply {
                         gravity = Gravity.CENTER
                         background = circle(Color.WHITE)
-                        elevation = dp(10).toFloat()
-                        translationY = -dp(22).toFloat()
+                        elevation = dp(14).toFloat()
+                        translationY = -dp(24).toFloat()
                     },
-                    FrameLayout.LayoutParams(dp(62), dp(62), Gravity.CENTER)
+                    FrameLayout.LayoutParams(dp(64), dp(64), Gravity.CENTER)
                 )
             } else if (key == "profile") {
                 slot.addView(
                     tv(icon, 18f).apply {
                         gravity = Gravity.CENTER
-                        background = circle(Color.parseColor("#D1D5DB"))
+                        background = circle(Color.parseColor("#E5E7EB"))
                     },
-                    FrameLayout.LayoutParams(dp(38), dp(38), Gravity.CENTER)
+                    FrameLayout.LayoutParams(dp(40), dp(40), Gravity.CENTER)
                 )
             } else {
                 slot.addView(
@@ -654,10 +671,10 @@ class MainActivity : Activity() {
                         minimumWidth = dp(18)
                         setPadding(dp(4), dp(1), dp(4), dp(1))
                         background = shape(YELLOW, 9, Color.WHITE)
-                        translationY = if (selected) -dp(22).toFloat() else 0f
+                        translationY = if (selected) -dp(24).toFloat() else 0f
                     },
                     FrameLayout.LayoutParams(WRAP, WRAP, Gravity.TOP or Gravity.END).apply {
-                        setMargins(0, dp(8), dp(14), 0)
+                        setMargins(0, dp(6), dp(12), 0)
                     }
                 )
             }
@@ -689,8 +706,96 @@ class MainActivity : Activity() {
         bar.addView(tv("  View cart", 16f, Color.WHITE, true), lp(0, WRAP, 1f))
         bar.addView(tv(money(subtotal()), 16f, YELLOW, true))
         cartBarHost.addView(bar, FrameLayout.LayoutParams(MATCH, WRAP).apply {
-            setMargins(dp(12), dp(8), dp(12), dp(26))
+            setMargins(dp(12), dp(8), dp(12), dp(72))
         })
+    }
+
+    // ───────────────────────── FLOATING ORDER TRACKER ─────────────────────────
+    private fun setupFloatingOrderTracker() {
+        val user = auth.currentUser ?: return
+        floatingOrderListener?.remove()
+        floatingOrderListener = db.collection("orders")
+            .whereEqualTo("customerId", user.uid)
+            .addSnapshotListener { snap, _ ->
+                floatingTrackerHost.removeAllViews()
+                val active = snap?.documents?.mapNotNull { doc ->
+                    val st = statusStep(doc.getString("status") ?: "")
+                    if (st in 0..3) doc else null
+                }?.sortedByDescending { (it.get("createdAt") as? Timestamp)?.seconds ?: 0L }?.firstOrNull()
+
+                if (active == null) {
+                    floatingTrackerHost.visibility = View.GONE
+                    return@addSnapshotListener
+                }
+
+                floatingTrackerHost.visibility = View.VISIBLE
+                val cardView = card(14).apply {
+                    background = shape(Color.WHITE, 18, YELLOW_DARK)
+                    elevation = dp(10).toFloat()
+                }
+
+                val topRow = hbox()
+                topRow.addView(tv("🛵 Active Order Tracker", 13f, ACCENT, true), lp(0, WRAP, 1f))
+                topRow.addView(tv("▲ Collapse / Expand", 11f, GREY))
+                cardView.addView(topRow)
+
+                val merchantName = active.getString("merchantName") ?: "Store"
+                val status = active.getString("status") ?: "placed"
+                cardView.addView(tv(merchantName, 16f, INK, true), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+                
+                val statusBox = hbox().apply {
+                    setPadding(dp(8), dp(4), dp(8), dp(4))
+                    background = shape(statusColor(status), 10)
+                }
+                statusBox.addView(tv(statusText(status), 12f, Color.WHITE, true))
+                cardView.addView(statusBox, lp(WRAP, WRAP, 0f, 0, 6, 0, 0))
+
+                val detailsContainer = vbox().apply { visibility = View.GONE }
+                detailsContainer.addView(View(context).apply { setBackgroundColor(LINE) }, lp(MATCH, 1, 0f, 0, 8, 0, 8))
+                detailsContainer.addView(tv("Items: " + orderItemsSummary(active), 13f, INK))
+                detailsContainer.addView(tv("Total: " + money(num(active, "total", 0.0)), 14f, INK, true), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+                detailsContainer.addView(ghostButton("Tap to view live tracking & details") {
+                    showOrderDetail(active.id, false) {}
+                }, lp(MATCH, WRAP, 0f, 6, 0, 0, 0))
+                
+                cardView.addView(detailsContainer)
+
+                // Drag/Touch and Tap toggle handlers for expanding/collapsing details
+                var dY = 0f
+                var isExpanded = false
+                cardView.setOnTouchListener { _, event ->
+                    when (event.action) {
+                        MotionEvent.ACTION_DOWN -> {
+                            dY = event.rawY
+                            true
+                        }
+                        MotionEvent.ACTION_MOVE -> {
+                            val diff = event.rawY - dY
+                            if (diff < -30 && !isExpanded) {
+                                isExpanded = true
+                                detailsContainer.visibility = View.VISIBLE
+                                true
+                            } else if (diff > 30 && isExpanded) {
+                                isExpanded = false
+                                detailsContainer.visibility = View.GONE
+                                true
+                            } else false
+                        }
+                        MotionEvent.ACTION_UP -> {
+                            if (Math.abs(event.rawY - dY) < 15) {
+                                isExpanded = !isExpanded
+                                detailsContainer.visibility = if (isExpanded) View.VISIBLE else View.GONE
+                            }
+                            true
+                        }
+                        else -> false
+                    }
+                }
+
+                floatingTrackerHost.addView(cardView, FrameLayout.LayoutParams(MATCH, WRAP).apply {
+                    setMargins(dp(12), dp(4), dp(12), dp(74))
+                })
+            }
     }
 
     // ───────────────────────── Cart logic ─────────────────────────
@@ -903,7 +1008,6 @@ class MainActivity : Activity() {
             }
     }
 
-    /** Loads every merchant's menu (cached) so search can match foods and products. */
     private fun loadAllProducts(onProgress: (done: Int, total: Int) -> Unit) {
         val list = merchants
         if (list.isEmpty()) {
@@ -919,7 +1023,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The customer's own orders + reviews (cached for a minute). */
     private fun loadMyData(force: Boolean, cb: () -> Unit) {
         val user = auth.currentUser ?: return
         val now = System.currentTimeMillis()
@@ -1046,6 +1149,7 @@ class MainActivity : Activity() {
                                     myOrdersAt = 0L
                                     myReviewsAt = 0L
                                     showHome()
+                                    setupFloatingOrderTracker()
                                 }
                         }
                     }
@@ -1078,7 +1182,10 @@ class MainActivity : Activity() {
                         u.updateProfile(profile).addOnCompleteListener {
                             db.collection("customers").document(u.uid).set(
                                 mapOf("name" to name, "phone" to phone, "email" to email)
-                            ).addOnCompleteListener { showHome() }
+                            ).addOnCompleteListener {
+                                showHome()
+                                setupFloatingOrderTracker()
+                            }
                         }
                     }
                     .addOnFailureListener {
@@ -1222,7 +1329,6 @@ class MainActivity : Activity() {
         return c
     }
 
-    /** Compact store row used on the Shop page (logo, name, ETA, fee, heart). */
     private fun storeRow(m: Merchant, onClick: () -> Unit): View {
         val row = hbox().apply {
             background = ripple(shape(Color.WHITE, 16, LINE))
@@ -1254,7 +1360,6 @@ class MainActivity : Activity() {
         return row
     }
 
-    /** ADD button / quantity stepper that stays in sync with the cart. */
     private fun addControl(m: Merchant, p: Product): View {
         val host = FrameLayout(this)
         fun render() {
@@ -2157,6 +2262,7 @@ class MainActivity : Activity() {
                     myOrdersAt = 0L
                     saveCart()
                     refreshNav()
+                    setupFloatingOrderTracker()
                     showOrderDetail(ref.id, true) { showHome() }
                 }
                 .addOnFailureListener {
@@ -2463,4 +2569,117 @@ class MainActivity : Activity() {
         } else {
             bottom.addView(tv("Track ›", 13f, INK, true))
         }
-        c.addView(bottom, 
+        c.addView(bottom, lp(MATCH, WRAP, 0f, 0, 8, 0, 0))
+        return c
+    }
+
+    // ───────────────────────── PROFILE (with past orders) ─────────────────────────
+    private fun showProfile() {
+        resetScreen()
+        setChrome("profile", true)
+        setHeader(titleHeader("My Profile", null))
+        val page = newPage()
+        val user = auth.currentUser
+
+        val cardInfo = card(16)
+        cardInfo.addView(tv(user?.displayName ?: "Customer", 20f, INK, true))
+        cardInfo.addView(tv(user?.email ?: "", 13f, GREY), lp(WRAP, WRAP, 0f, 0, 2, 0, 0))
+        val phone = prefs.getString("phone", "") ?: ""
+        if (phone.isNotBlank()) cardInfo.addView(tv("📱 $phone", 13f, INK), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+        page.addView(cardInfo, lp(MATCH, WRAP, 0f, 0, 0, 0, 16))
+
+        sectionTitle(page, "Quick links")
+        page.addView(ghostButton("🧾 View All Orders & History") { showOrders() }, lp(MATCH, WRAP, 0f, 0, 0, 0, 8))
+        page.addView(ghostButton("📍 Saved Location: " + (if (addrLabel.isBlank()) "Not set" else addrLabel)) {
+            showLocationPicker { showProfile() }
+        }, lp(MATCH, WRAP, 0f, 0, 0, 0, 16))
+
+        sectionTitle(page, "Past orders")
+        val pastOrdersHost = vbox()
+        page.addView(pastOrdersHost, lp(MATCH, WRAP))
+        pastOrdersHost.addView(tv("Loading past orders…", 14f, GREY))
+
+        loadMyData(false) {
+            pastOrdersHost.removeAllViews()
+            val delivered = myOrders.filter { statusStep(it.getString("status") ?: "") == 4 }
+            val reviewed = myReviews.map { it.id }.toSet()
+            if (delivered.isEmpty()) {
+                pastOrdersHost.addView(tv("No completed past orders yet.", 13f, GREY))
+                return@loadMyData
+            }
+            delivered.take(5).forEach { d ->
+                pastOrdersHost.addView(orderCard(d, reviewed), lp(MATCH, WRAP, 0f, 0, 0, 0, 10))
+            }
+        }
+
+        page.addView(
+            tv("Log out", 15f, RED, true).apply {
+                gravity = Gravity.CENTER
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                background = ripple(shape(Color.WHITE, 12, RED))
+                setOnClickListener {
+                    auth.signOut()
+                    prefs.edit().remove("cart").apply()
+                    cart.clear()
+                    cartMerchant = null
+                    showAuth(false)
+                }
+            },
+            lp(MATCH, WRAP, 0f, 0, 24, 0, 0)
+        )
+    }
+
+    // Order detail view stub
+    private fun showOrderDetail(orderId: String, trackingMode: Boolean, back: () -> Unit) {
+        resetScreen()
+        onBack = back
+        setHeader(titleHeader(if (trackingMode) "Order Placed Successfully!" else "Order Details", back))
+        setChrome(null, false)
+        val page = newPage()
+        
+        db.collection("orders").document(orderId).get().addOnSuccessListener { doc ->
+            if (!doc.exists()) {
+                page.addView(emptyState("⚠️", "Order not found", ""))
+                return@addOnSuccessListener
+            }
+            page.addView(tv("Merchant: " + doc.getString("merchantName"), 18f, INK, true))
+            page.addView(tv("Status: " + statusText(doc.getString("status") ?: ""), 15f, ACCENT, true), lp(WRAP, WRAP, 0f, 0, 4, 0, 10))
+            page.addView(card(14).apply {
+                addView(tv("Items Summary", 15f, INK, true))
+                addView(tv(orderItemsSummary(doc), 14f, GREY), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+                addView(tv("Total: " + money(num(doc, "total", 0.0)), 16f, INK, true), lp(WRAP, WRAP, 0f, 0, 8, 0, 0))
+            }, lp(MATCH, WRAP))
+            page.addView(cta("Back to Home") { showHome() }, lp(MATCH, WRAP, 0f, 20, 0, 0, 0))
+        }
+    }
+
+    private fun reorder(d: DocumentSnapshot) {
+        val mid = d.getString("merchantId") ?: return
+        val mname = d.getString("merchantName") ?: "Merchant"
+        val fee = num(d, "deliveryFee", 40.0)
+        val items = d.get("items") as? List<*> ?: return
+        
+        cart.clear()
+        cartMerchant = Merchant(mid, mname, fee)
+        items.forEach {
+            val mp = it as? Map<*, *> ?: return@forEach
+            val id = mp["productId"] as? String ?: "item"
+            val name = mp["name"] as? String ?: "Product"
+            val price = (mp["unitPrice"] as? Number)?.toDouble() ?: 0.0
+            val qty = (mp["quantity"] as? Number)?.toInt() ?: 1
+            cart[id] = CartLine(id, name, price, qty)
+        }
+        onCartChanged()
+        showCart()
+        toast("Items added to cart from past order!")
+    }
+
+    private fun reviewCard(d: DocumentSnapshot, mine: Boolean): View {
+        val c = card(12)
+        c.addView(tv(stars((d.get("merchantRating") as? Number)?.toInt() ?: 5), 14f, STAR))
+        val comment = d.getString("comment") ?: ""
+        if (comment.isNotBlank()) c.addView(tv(comment, 13f, INK), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+        c.addView(tv(timeAgo(d.get("createdAt") as? Timestamp), 11f, GREY), lp(WRAP, WRAP, 0f, 0, 4, 0, 0))
+        return c
+    }
+}
