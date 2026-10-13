@@ -65,22 +65,6 @@ import java.util.Date
 import java.util.Locale
 import java.util.concurrent.Executors
 
-// ───────────────────────── Design tokens (yellow theme) ─────────────────────────
-private val YELLOW = Color.parseColor("#FFC21A")
-private val YELLOW_DARK = Color.parseColor("#E2A400")
-private val YELLOW_SOFT = Color.parseColor("#FFF6D6")
-private val OK = Color.parseColor("#1E7B3A")
-private val OK_SOFT = Color.parseColor("#E8F5EC")
-private val ACCENT = Color.parseColor("#F97316")
-private val INK = Color.parseColor("#1F2937")
-private val GREY = Color.parseColor("#6B7280")
-private val LINE = Color.parseColor("#E5E7EB")
-private val BG = Color.parseColor("#F7F7F5")
-private val RED = Color.parseColor("#D93025")
-private val STAR = Color.parseColor("#F5A623")
-private const val MATCH = ViewGroup.LayoutParams.MATCH_PARENT
-private const val WRAP = ViewGroup.LayoutParams.WRAP_CONTENT
-
 @Suppress("DEPRECATION")
 class MainActivity : Activity() {
 
